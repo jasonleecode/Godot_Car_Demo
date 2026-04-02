@@ -28,22 +28,26 @@ func _physics_process(delta):
 	%Hud/gearshift_label.text="Gear: "+str(gearshift)
 
 func process_accel(delta):
-	if Input.is_action_pressed("forward"):
+	var accel = Input.get_action_strength("forward")
+	var reverse = Input.get_action_strength("backward")
+
+	if accel > 0:
 		# Increase engine force at low speeds to make the initial acceleration faster.
 		if fwd_mps >= -1:
 			if speed < 30 and speed != 0:
 				engine_force = clamp(engine_force_value * 10 / speed, 0, 300)
 			else:
 				engine_force = engine_force_value
-		engine_force = engine_force * gear_multiplicator
+		engine_force = engine_force * gear_multiplicator * accel
 		return
-	
-	if Input.is_action_pressed("backward"):
-	# Increase engine force at low speeds to make the initial acceleration faster.
+
+	if reverse > 0:
+		# Increase engine force at low speeds to make the initial acceleration faster.
 		if speed < 20 and speed != 0:
 			engine_force = -clamp(engine_force_value * 3 / speed, 0, 300)
 		else:
 			engine_force = -engine_force_value
+		engine_force = engine_force * reverse
 		return
 	engine_force = 0
 	brake = 0
@@ -69,7 +73,7 @@ func process_steer(delta):
 	steering = move_toward(steering, steer_target, STEER_SPEED * delta)
 
 func process_brake(delta):
-	if Input.is_action_pressed("ui_select"):
+	if Input.is_action_pressed("brake"):
 		brake=0.5
 		$wheel_rear_left.wheel_friction_slip=2
 		$wheel_rear_right.wheel_friction_slip=2

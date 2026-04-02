@@ -9,7 +9,7 @@ func init():
 	print("init transform %s " % init_transform)
 
 func _input(event):
-	if event.is_action_pressed("ui_cancel"):
+	if event.is_action_pressed("reset"):
 		
 		# wtf is this, Godot???
 		PhysicsServer3D.body_set_state(
