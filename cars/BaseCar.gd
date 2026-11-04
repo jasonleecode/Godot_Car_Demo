@@ -13,19 +13,15 @@ var gear_locked = false
 var fwd_mps : float
 var speed: float
 
-func _ready():
-	%CarResetter.init()
 
 func _physics_process(delta):
-	speed = linear_velocity.length()*Engine.get_frames_per_second()*delta
-	fwd_mps = transform.basis.x.x
+	speed = linear_velocity.length()
+	fwd_mps = linear_velocity.dot(global_transform.basis.z)
 	traction(speed)
 	process_gear_shift()
 	process_accel(delta)
 	process_steer(delta)
 	process_brake(delta)
-	%Hud/speed.text=str(round(speed*3.6))+"  KMPH"
-	%Hud/gearshift_label.text="Gear: "+str(gearshift)
 
 func process_accel(delta):
 	var accel = Input.get_action_strength("forward")
@@ -33,11 +29,10 @@ func process_accel(delta):
 
 	if accel > 0:
 		# Increase engine force at low speeds to make the initial acceleration faster.
-		if fwd_mps >= -1:
-			if speed < 30 and speed != 0:
-				engine_force = clamp(engine_force_value * 10 / speed, 0, 300)
-			else:
-				engine_force = engine_force_value
+		if speed < 30 and speed != 0:
+			engine_force = clamp(engine_force_value * 10 / speed, 0, 300)
+		else:
+			engine_force = engine_force_value
 		engine_force = engine_force * gear_multiplicator * accel
 		return
 
@@ -78,6 +73,7 @@ func process_brake(delta):
 		$wheel_rear_left.wheel_friction_slip=2
 		$wheel_rear_right.wheel_friction_slip=2
 	else:
+		brake = 0
 		$wheel_rear_left.wheel_friction_slip=2.9
 		$wheel_rear_right.wheel_friction_slip=2.9
 
