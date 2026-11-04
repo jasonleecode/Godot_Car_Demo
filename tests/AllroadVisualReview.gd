@@ -1,6 +1,9 @@
 extends SceneTree
+var output_prefix := "/tmp/allroad-review-"
 func _initialize() -> void: run.call_deferred()
 func run() -> void:
+	if "--baseline" in OS.get_cmdline_user_args():
+		output_prefix = "/tmp/allroad-audit-before-"
 	var studio := Node3D.new()
 	root.add_child(studio)
 	var environment := WorldEnvironment.new()
@@ -49,12 +52,18 @@ func run() -> void:
 		else:
 			car.visual.update_suspension([0.45,0.45,0.45,0.45],0,0)
 		camera.current = true
-		for view in [["front",Vector3(3.8,1.9,5.8)],["side",Vector3(7.3,1.3,0.2)],["rear",Vector3(-3.8,1.8,-5.8)]]:
+		for view in [["front",Vector3(3.8,1.9,5.8)],["side",Vector3(7.3,1.3,0.2)],["rear",Vector3(-3.8,1.8,-5.8)], ["front-ortho",Vector3(0,.8,8)], ["side-ortho",Vector3(8,.8,0)], ["rear-ortho",Vector3(0,.8,-8)], ["front-right",Vector3(-3.8,1.9,5.8)]]:
+			camera.projection = Camera3D.PROJECTION_ORTHOGONAL if "ortho" in view[0] else Camera3D.PROJECTION_PERSPECTIVE
+			camera.size = 3.5
 			camera.position = view[1]
-			camera.look_at(Vector3(0,0.9,0))
+			camera.look_at(Vector3(0,0.8 if "ortho" in view[0] else 0.9,0))
 			await create_timer(0.7).timeout
 			await RenderingServer.frame_post_draw
-			root.get_texture().get_image().save_png("/tmp/allroad-review-"+view[0]+".png")
+			root.get_texture().get_image().save_png(output_prefix+view[0]+".png")
+		camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		if "--baseline" in OS.get_cmdline_user_args():
+			quit()
+			return
 		plane.visible = false
 		var fill := OmniLight3D.new()
 		studio.add_child(fill)

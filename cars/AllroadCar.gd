@@ -5,11 +5,11 @@ func _ready() -> void:
 	wheel_radius = 0.35785
 	allow_low_range = false
 	wheel_mounts.assign(preload("res://cars/AllroadVisual.gd").MOUNTS)
-	add_collision(Vector3(1.77,0.34,4.55),Vector3(0,0.23,0.025))
-	add_collision(Vector3(1.47,0.47,2.02),Vector3(0,0.84,-0.69))
-	add_collision(Vector3(1.70,0.16,1.25),Vector3(0,0.51,1.65))
-	add_collision(Vector3(1.79,0.22,0.24),Vector3(0,0.04,2.38))
-	add_collision(Vector3(1.77,0.22,0.23),Vector3(0,0.05,-2.31))
+	add_collision(Vector3(1.77,0.34,4.55),Vector3(0,0.23,-0.09))
+	add_collision(Vector3(1.43,0.42,1.82),Vector3(0,0.81,-0.81))
+	add_collision(Vector3(1.65,0.13,1.05),Vector3(0,0.44,1.57))
+	add_collision(Vector3(1.70,0.22,0.24),Vector3(0,0.04,2.26))
+	add_collision(Vector3(1.70,0.22,0.23),Vector3(0,0.05,-2.43))
 
 func _physics_process(delta: float) -> void:
 	if input_enabled and Input.is_action_just_pressed("gear"):

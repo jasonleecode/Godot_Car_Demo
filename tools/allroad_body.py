@@ -2,6 +2,8 @@
 import math
 import numpy as np
 from mathutils import Vector
+from mathutils.geometry import tessellate_polygon
+import bmesh
 
 
 def build(m, g):
@@ -15,21 +17,6 @@ def build(m, g):
         d0=(ys[i+1]-ys[max(0,i-1)])/(xs[i+1]-xs[max(0,i-1)])
         d1=(ys[min(len(xs)-1,i+2)]-ys[i])/(xs[min(len(xs)-1,i+2)]-xs[i])
         return (2*t**3-3*t*t+1)*ys[i]+(t**3-2*t*t+t)*h*d0+(-2*t**3+3*t*t)*ys[i+1]+(t**3-t*t)*h*d1
-    def width(z):
-        return curve(z,[(-2.34,.935),(-2.06,.944),(-1.46,.948),(-.55,.925),(.55,.927),(1.46,.95),(2.05,.944),(2.34,.935)])
-    def belt(z):
-        return curve(z,[(-2.34,.625),(-1.9,.67),(-.5,.65),(.95,.655),(1.5,.64),(2.0,.60),(2.34,.55)])
-    def lower(z):
-        h=-.115
-        for c in [-1.4625,1.4625]:
-            if abs(z-c)<.416:h=max(h,math.sqrt(.416**2-(z-c)**2)+.008)
-        return h
-    def skin_x(z,y):
-        # The entire side rolls inward at the sill and above the shoulder.
-        roll=curve(y,[(-.15,-.105),(-.03,-.065),(.14,-.035),(.30,-.012),(.46,0),(.52,.006),(.555,-.005),(.61,-.029),(.69,-.065)])
-        # A shallow lower door scallop, blending out before the flared fenders.
-        scallop=.013*math.exp(-((y-.20)/.085)**2)*math.exp(-(z/.98)**6)
-        return width(z)+roll-scallop
     def rounded(points,r=.045):
         result=[]
         for i,p in enumerate(points):
@@ -56,182 +43,323 @@ def build(m, g):
     def projected(name,poly,fn,mat):
         # Subdivide in surface coordinates before projection. A single n-gon
         # cuts through a crowned panel, hiding the middle of a lens or grille.
-        center=sum((Vector(p) for p in poly),Vector((0,0)))/len(poly)
-        verts=[fn(*center)];faces=[];count=len(poly)
-        for ring in range(1,13):
-            for p in poly:verts.append(fn(*(center.lerp(Vector(p),ring/12))))
-            start=1+(ring-1)*count
-            for i in range(count):
-                nxt=(i+1)%count
-                if ring==1:faces.append((0,start+i,start+nxt))
-                else:faces.append((start-count+i,start+i,start+nxt,start-count+nxt))
+        verts=[];faces=[];cache={};n=8
+        def vertex(p):
+            key=(round(p.x,8),round(p.y,8))
+            if key not in cache:
+                cache[key]=len(verts);verts.append(fn(p.x,p.y))
+            return cache[key]
+        # Ear clipping also handles concave valance strips without overlapping fans.
+        polygon=[Vector((p[0],p[1],0)) for p in poly]
+        for tri in tessellate_polygon([polygon]):
+            a,b,c=[polygon[index] for index in tri] if isinstance(tri[0],int) else tri
+            ids={}
+            for i in range(n+1):
+                for j in range(n+1-i):ids[i,j]=vertex(a+(b-a)*(i/n)+(c-a)*(j/n))
+            for i in range(n):
+                for j in range(n-i):
+                    faces.append((ids[i,j],ids[i+1,j],ids[i,j+1]))
+                    if i+j<n-1:faces.append((ids[i+1,j],ids[i+1,j+1],ids[i,j+1]))
+        return outward(name,verts,faces,mat)
+    def outward(name,verts,faces,mat):
+        # Open detail patches do not enclose a volume. Recalculating normals
+        # alone cannot decide which way faces out, especially on mirrored lamps.
+        center=sum((Vector(v) for v in verts),Vector())/len(verts)
+        normal=sum(((Vector(verts[f[1]])-Vector(verts[f[0]])).cross(Vector(verts[f[2]])-Vector(verts[f[0]])) for f in faces),Vector())
+        direction=Vector((0,0,math.copysign(1,center.z))) if abs(center.z)>1.9 else Vector((math.copysign(1,center.x),0,0))
+        if normal.dot(direction)<0:faces=[tuple(reversed(f)) for f in faces]
         return mesh(name,verts,faces,mat,smooth=True)
-    # Four flowing wheel shoulders emerge from a rounded lower body, not a box.
+    # The 2019 factory drawing locates the axles at +/-1.4625 m, with
+    # 921 mm front and 1105 mm rear overhangs. The former mesh reversed this bias.
+    FRONT, REAR = 2.3835, -2.5675
+    FRONT_TANGENT, REAR_TANGENT = 2.04, -2.2475
+    def width(z):
+        return curve(z,[(-2.25,.923),(-1.7,.942),(-1.46,.949),(-.7,.921),(.6,.925),(1.46,.951),(2.04,.923)])
+    def belt(z):
+        return curve(z,[(-2.57,.655),(-2.25,.677),(-1.7,.700),(-.7,.682),(.90,.648),(1.45,.610),(1.95,.515),(2.18,.451),(2.3835,.388)])
+    def roll(y,z=0):
+        # Shoulder highlight, concave lower doors and an inward-turned sill.
+        result=curve(y,[(-.17,-.072),(-.08,-.041),(.02,-.036),(.09,-.059),(.22,-.031),(.37,-.010),(.49,.002),(.535,.004),(.56,-.004),(.63,-.025),(.71,-.056)])
+        result-=.016*math.exp(-((y-.105)/.075)**2)*math.exp(-(z/1.02)**8)
+        return result
+    def side_x(z,y):return width(z)+roll(y,z)
+    def front_offset(y):
+        return curve(y,[(-.17,-.105),(-.10,-.025),(.05,0),(.18,0),(.30,-.012),(.46,-.034),(.7,-.06)])
+    def rear_offset(y):
+        return curve(y,[(-.17,.095),(-.08,.005),(.05,0),(.17,.020),(.27,.060),(.38,.058),(.52,.045),(.66,.135)])
+    def front_z(x,y):
+        w=.923+roll(y,2.2); t=min(.999999,abs(x)/w)
+        return FRONT_TANGENT+(FRONT-FRONT_TANGENT)*math.sqrt(1-t*t)+front_offset(y)
+    def rear_z(x,y):
+        w=.923+roll(y,-2.4);t=min(.999999,abs(x)/w)
+        # Plate pocket is an actual depression in the tailgate.
+        pocket=.034*math.exp(-(x/.31)**6)*math.exp(-((y-.385)/.075)**6)
+        return REAR_TANGENT-(REAR_TANGENT-REAR)*math.sqrt(1-t*t)+rear_offset(y)+pocket
+    def lower(z):
+        h=-.155
+        for c in [-1.4625,1.4625]:
+            if abs(z-c)<.420:h=max(h,math.sqrt(.420**2-(z-c)**2)+.004)
+        return h
+    def plan(u):
+        if u<.16:
+            a=u/.16*math.pi/2
+            return .923*math.sin(a),FRONT_TANGENT+(FRONT-FRONT_TANGENT)*math.cos(a)
+        if u>.84:
+            a=(u-.84)/.16*math.pi/2
+            return .923*math.cos(a),REAR_TANGENT-(REAR_TANGENT-REAR)*math.sin(a)
+        z=FRONT_TANGENT+(REAR_TANGENT-FRONT_TANGENT)*(u-.16)/.68
+        return width(z),z
+    def hull(u,v,side=1):
+        px,z=plan(u);y=lower(z)+(belt(z)-lower(z))*v
+        x=px*(1+roll(y,z)/width(z))
+        if u<.16:z+=front_offset(y)
+        elif u>.84:z+=rear_offset(y)+.034*math.exp(-(x/.31)**6)*math.exp(-((y-.385)/.075)**6)
+        return side*x,y,z
+    grille=rounded([(-.405,-.035),(-.465,-.010),(-.535,.295),(-.425,.382),(.425,.382),(.535,.295),(.465,-.010),(.405,-.035)],.023)
+    lamps=rounded([(.433,.385),(.862,.447),(.902,.330),(.678,.285)],.014)
+    intakes=rounded([(.585,-.067),(.856,-.064),(.858,.145),(.638,.163)],.028)
+    def is_open(p):
+        return p.z>1.94 and (inside((p.x,p.y),grille) or inside((abs(p.x),p.y),lamps) or inside((abs(p.x),p.y),intakes))
+    # Each half is a single continuous wrap from the centre of the nose to the
+    # centre of the tail. This removes the old vertical side/end panel joints.
+    body_wrap=perforated('Continuous body and bumper wrap',lambda u,v:hull(u*2,v,1) if u<=.5 else hull(2-u*2,v,-1),760,54,paint,is_open)
+    bm=bmesh.new();bm.from_mesh(body_wrap.data)
+    bmesh.ops.remove_doubles(bm,verts=list(bm.verts),dist=.000001)
+    bmesh.ops.recalc_face_normals(bm,faces=list(bm.faces));bm.to_mesh(body_wrap.data);bm.free()
+    shell(body_wrap,.009)
     for side in [-1,1]:
-        def side_surface(u,v):
-            z=-2.29+u*4.58;y=lower(z)+(belt(z)-lower(z))*v
-            return (side*skin_x(z,y),y,z)
-        shell(grid('Continuous convex body flank',side_surface,260,32,paint),.016)
+        # The allroad arch is a broad molded strip, with lips returning into the well.
         for c in [-1.4625,1.4625]:
             def arch(u,v,c=c):
-                a=-.20+u*(math.pi+.40);r=.419+v*.037;y=math.sin(a)*r;z=c+math.cos(a)*r
-                return (side*(skin_x(z,y)+.009+math.sin(v*math.pi)*.005),y,z)
-            shell(grid('Rounded allroad arch cladding',arch,80,8,trim),.017)
-            grid('Inner wheel housing',lambda u,v,c=c:(side*(.68+.26*v),math.sin(u*math.pi)*.414,c+math.cos(u*math.pi)*.414),64,10,black)
-        # Wide shoulder becomes an inward-turning window sill, so the greenhouse
-        # grows from the body instead of standing on a separate straight rail.
-        grid('Window shoulder blend',lambda u,v:(side*((skin_x(-2.28+u*3.20,belt(-2.28+u*3.20)))*(1-v)+.866*v),belt(-2.28+u*3.20)*(1-v)+.675*v,-2.28+u*3.20),140,8,paint)
-        box('Sill protection',(.07,.10,1.96),(side*.86,-.075,0),trim,.035)
-        line('Sill aluminum accent',[(side*.903,-.078,z) for z in np.linspace(-.96,.96,40)],.009,chrome)
-        for tz,bz in [(.91,.70),(-.43,-.41),(-1.48,-.94)]:
+                a=-.31+u*(math.pi+.62);r=.423+.052*v;y=math.sin(a)*r;z=c+math.cos(a)*r
+                return side*(side_x(z,y)+.005+math.sin(v*math.pi)*.009),y,z
+            shell(grid('Molded wide allroad wheel arch',arch,96,12,trim),.014)
+            grid('Wheelhouse return',lambda u,v,c=c:(side*(.69+.24*v),math.sin(u*math.pi)*.418,c+math.cos(u*math.pi)*.418),80,12,black)
+            liner=[(side*.68,-.045,c+.418),(side*.68,-.045,c-.418)]
+            liner.extend((side*.68,math.sin(a)*.418,c+math.cos(a)*.418) for a in np.linspace(math.pi,0,80))
+            shell(mesh('Closed inner wheelhouse liner',liner,[tuple(range(len(liner)))],black),.004)
+        grid('Pressed rocker cladding',lambda u,v:(side*(side_x(-.99+1.98*u,-.147+.12*v)+.008),-.147+.12*v,-.99+1.98*u),100,14,trim)
+        grid('Sill aluminum insert',lambda u,v:(side*(side_x(-.95+1.90*u,-.128+.038*v)+.012),-.128+.038*v,-.95+1.90*u),80,6,chrome)
+        # True door outlines: front hinge is almost vertical; the B pillar leans.
+        for controls in [[(.98,-.03),(.95,.24),(.91,.56),(.85,.65)], [(-.16,-.05),(-.19,.30),(-.22,.68)], [(-.93,-.04),(-1.08,.18),(-1.25,.49),(-1.19,.70)]]:
             pts=[]
-            for t in np.linspace(0,1,65):
-                y=-.025+t*.68;z=bz+(tz-bz)*t
-                if y>lower(z)+.012:pts.append((side*(skin_x(z,y)+.0015),y,z))
-            line('Pressed door shutline',pts,.0015,black)
-        for z in [-.25,-1.16]:
-            x=skin_x(z,.535)
-            box('Handle recess',(.012,.039,.17),(side*(x+.006),.535,z),black,.015)
-            box('Body colored pull handle',(.025,.025,.145),(side*(x+.018),.542,z),paint,.011)
-        line('Mirror stalk',[(side*.84,.70,.65),(side*.98,.69,.64)],.018,black)
-        box('Mirror sculpted shell',(.19,.09,.24),(side*1.01,.728,.63),paint,.043)
-        box('Mirror face',(.15,.059,.007),(side*1.01,.73,.507),chrome,.022)
-        line('Mirror repeater',[(side*.95,.71,.747),(side*1.08,.71,.722)],.004,led)
-    # Hood with a rounded planform, crown, two shoulder creases and falling nose.
+            for a,b in zip(controls,controls[1:]):
+                for t in np.linspace(0,1,18):
+                    z=a[0]*(1-t)+b[0]*t;y=a[1]*(1-t)+b[1]*t
+                    if y>lower(z)+.012:pts.append((side*(side_x(z,y)+.0018),y,z))
+            line('Door shut line',pts,.0014,black)
+        for z in [-.04,-.98]:
+            x=side_x(z,.545)
+            box('Recessed handle pocket',(.009,.035,.158),(side*(x+.004),.545,z),black,.014)
+            box('Flush painted pull',(.027,.026,.149),(side*(x+.012),.549,z),paint,.012)
+        # Fuel door and the fine fender crease stay attached to the crowned skin.
+        if side<0:
+            poly=rounded([(-1.69,.59),(-1.38,.588),(-1.40,.43),(-1.68,.44)],.035)
+            pts=[(side*(side_x(z,y)+.002),y,z) for z,y in poly]
+            line('Fuel filler shut line',pts+[pts[0]],.0014,black)
+        line('Mirror pedestal',[(side*.833,.674,.63),(side*.925,.668,.64)],.017,black)
+        box('Mirror black lower cap',(.19,.048,.26),(side*.960,.690,.625),piano,.024)
+        box('Mirror painted crown',(.185,.066,.25),(side*.960,.725,.625),paint,.032)
+        box('Mirror glass',(.15,.064,.008),(side*.960,.713,.496),chrome,.025)
+        line('Mirror signal',[(side*.907,.708,.748),(side*1.036,.708,.724)],.003,led)
+    # Bonnet and fender crowns share the same wrap boundary. The nose falls
+    # approximately 250 mm from the cowl; the old 150 mm drop made it slab-fronted.
+    def front_edge(t):
+        a=math.asin(abs(t)*.96);px=.923*math.sin(a);z=FRONT_TANGENT+(FRONT-FRONT_TANGENT)*math.cos(a)
+        y=belt(z);x=px*(1+roll(y,z)/width(z))
+        return math.copysign(x,t),y,z+front_offset(y),z
     def hood(u,v):
-        t=-1+2*u;end=2.455-.20*abs(t)**2.3;z=.94+v*(end-.94)
-        x=t*(width(z)-.052)
-        y=.680-.150*(v*v*(3-2*v))+.025*(1-t*t)
-        y+=.010*math.exp(-((abs(t)-.67)/.055)**2)*math.sin(math.pi*v)
+        t=-1+2*u;ex,ey,ez,bz=front_edge(t)
+        x=t*.813*(1-v)+ex*v
+        z=(.9-.025*(1-t*t))*(1-v)+ez*v
+        y=(.650+.015*(1-t*t))*(1-v)+ey*v+.053*math.sin(math.pi*v)*(1-.32*t*t)
+        y+=.007*math.exp(-((abs(t)-.77)/.055)**2)*math.sin(math.pi*v)
         return x,y,z
-    shell(grid('Crowned compound-curvature bonnet',hood,72,80,paint),.016)
+    shell(grid('Sculpted falling bonnet',hood,90,90,paint),.009)
     for side in [-1,1]:
-        line('Bonnet shutline',[(side*hood(1,v)[0],hood(1,v)[1]+.0015,hood(1,v)[2]) for v in np.linspace(0,1,90)],.0017,black)
-        def fender(u,v):
-            edge=Vector(hood(1,u));z=edge.z;out=Vector((skin_x(z,belt(z)),belt(z),z))
-            p=edge.lerp(out,v);p.y+=.010*math.sin(v*math.pi)
+        edge=[hood(1,v) for v in np.linspace(0,1,90)]
+        line('Bonnet side shutline',[(side*x,y+.001,z) for x,y,z in edge],.0015,black)
+        def crown(u,v):
+            a=Vector(hood(1,u));z=a.z
+            if z<=FRONT_TANGENT: b=Vector((side_x(z,belt(z)),belt(z),z))
+            else:
+                # Interpolate to the matching point on the rounded front wrap.
+                basez=z-front_offset(a.y);c=max(0,min(1,(basez-FRONT_TANGENT)/(FRONT-FRONT_TANGENT)))
+                angle=math.acos(c);u_wrap=angle/(math.pi/2)*.16;b=Vector(hull(u_wrap,1))
+            p=a.lerp(b,v);p.y+=.009*math.sin(math.pi*v)*(1-u)
             return side*p.x,p.y,p.z
-        grid('Flowing bonnet to fender crown',fender,90,12,paint)
-    def nose_z(x,y):
-        return 2.505-.14*(abs(x)/.94)**3.2+curve(y,[(-.12,-.10),(-.04,-.018),(.10,.0),(.28,-.012),(.43,-.030),(.61,-.050)])
-    grille=rounded([(-.46,-.035),(-.57,.09),(-.56,.37),(-.44,.49),(.44,.49),(.56,.37),(.57,.09),(.46,-.035)],.030)
-    lamps=[(.48,.535),(.65,.425),(.913,.455),(.912,.585)]
-    def front(u,v):
-        t=-1+2*u;y=-.11+v*.70;x=t*(.86+.065*math.sin(v*math.pi*.82))
-        return x,y,nose_z(x,y)
-    front_shell=perforated('Sculpted nose with real grille apertures',front,140,68,paint,lambda p:inside((p.x,p.y),grille) or inside((abs(p.x),p.y),lamps))
-    shell(front_shell,.018)
-    # Rounded returns share the same end cross-sections as the side skins.
+        grid('Bonnet to wheel shoulder',crown,100,16,paint)
+    line('Bonnet front panel gap',[(hood(u,1)[0],hood(u,1)[1]+.001,hood(u,1)[2]) for u in np.linspace(0,1,150)],.0015,black)
+    # Broad flat metal borders, rather than round tubes, make the Singleframe
+    # read as a production pressing. All lamp/grille patches follow the wrap.
+    def inset(poly,amount):
+        center=sum((Vector(p) for p in poly),Vector((0,0)))/len(poly)
+        return [Vector(p).lerp(center,amount) for p in poly]
+    def band(name,outer,inner,fn,mat):
+        n=len(outer);verts=[];faces=[];sub=6
+        for j in range(5):
+            for i in range(n*sub):
+                k=i//sub;t=(i%sub)/sub
+                a=Vector(outer[k]).lerp(Vector(outer[(k+1)%n]),t)
+                b=Vector(inner[k]).lerp(Vector(inner[(k+1)%n]),t)
+                verts.append(fn(*a.lerp(b,j/4)))
+        count=n*sub
+        for j in range(4):
+            for i in range(count):
+                nxt=(i+1)%count;faces.append((j*count+i,j*count+nxt,(j+1)*count+nxt,(j+1)*count+i))
+        return outward(name,verts,faces,mat)
+    f=lambda x,y:(x,y,front_z(x,y))
+    projected('Singleframe recessed background',grille,lambda x,y:(x,y,front_z(x,y)-.033),piano)
+    band('Singleframe satin aluminum frame',grille,inset(grille,.055),lambda x,y:(x,y,front_z(x,y)+.004),chrome)
+    for y in np.linspace(.015,.345,8):
+        half=.45 if y<.08 else (.49 if y<.28 else .45)
+        projected('Grille horizontal black louvre',[(-half,y-.008),(half,y-.008),(half,y+.008),(-half,y+.008)],lambda x,y:(x,y,front_z(x,y)-.022),trim)
+    for x in np.linspace(-.395,.395,6):
+        poly=[(x-.007,-.008),(x+.007,-.008),(x+.008,.354),(x-.008,.354)]
+        projected('Polished vertical grille blade',poly,lambda x,y:(x,y,front_z(x,y)-.010),chrome)
+        for y in [.24,.31]:box('Grille cell',(.075,.028,.018),(x+.03,y,front_z(x+.03,y)-.024),piano,.004)
+    for x in [-.12,-.04,.04,.12]:oval('Front four rings',(x,.302,front_z(0,.302)+.006),.056,.041,.0045,chrome)
+    box('Front plate plinth',(.535,.112,.020),(0,.135,front_z(0,.135)+.001),black,.009)
+    box('Front plate',(.515,.098,.007),(0,.135,front_z(0,.135)+.015),chrome,.004)
+    text('Front plate lettering','A6 allroad',(0,.135,front_z(0,.135)+.020),.050,black)
     for side in [-1,1]:
-        def corner(u,v,side=side):
-            y=-.115+(belt(2.29)+.115)*v;a=Vector((side*skin_x(2.29,y),y,2.29));b=Vector(front(1 if side>0 else 0,v))
-            control=Vector((a.x,(a.y+b.y)/2,b.z))
-            return tuple(a*(1-u)**2+control*2*u*(1-u)+b*u*u)
-        shell(grid('Swept front corner',corner,20,32,paint),.017)
-    # Close the short curved lip between the bonnet and the nose.
-    grid('Bonnet nose hem',lambda u,v:tuple(Vector(hood(u,1)).lerp(Vector(front(u,1)),v)),72,10,paint)
-    projected('Deep black Singleframe',grille,lambda x,y:(x,y,nose_z(x,y)-.026),piano)
-    line('Singleframe rim',[(x,y,nose_z(x,y)+.004) for x,y in grille+[grille[0]]],.010,chrome)
-    for x in np.linspace(-.43,.43,6):
-        line('Vertical grille blade',[(x,y,nose_z(x,y)-.009) for y in np.linspace(.01,.445,25)],.007,chrome)
-    for y in np.linspace(.04,.42,8):line('Recessed grille crossbar',[(x,y,nose_z(x,y)-.015) for x in np.linspace(-.5,.5,50)],.004,trim)
-    for x in [-.105,-.035,.035,.105]:oval('Audi rings',(x,.335,nose_z(0,.335)+.014),.051,.034,.0045,chrome)
-    box('Number plate',(.48,.086,.015),(0,.14,nose_z(0,.14)+.012),black,.005)
-    text('A6 allroad front plate','A6 allroad',(0,.14,nose_z(0,.14)+.022),.043,chrome)
-    for side in [-1,1]:
-        outline=rounded(lamps,.012)
-        pts=[(side*x,y,nose_z(x,y)+.005) for x,y in outline]
-        shell(projected('Recessed matrix lamp housing',outline,lambda x,y:(side*x,y,nose_z(x,y)+.005),piano),.012)
-        line('Headlamp black perimeter',pts+[pts[0]],.009,black)
-        projected('Optical lamp cover',outline,lambda x,y:(side*x,y,nose_z(x,y)+.026),lens)
-        drl=[(.53,.526),(.666,.466),(.875,.484),(.884,.552)]
-        line('Signature LED light guide',[(side*x,y,nose_z(x,y)+.017) for x,y in drl],.006,led)
-        for x in np.linspace(.69,.85,5):
-            y=.50+(x-.69)*.08
-            line('Matrix emitter',[(side*x,y,nose_z(x,y)+.018),(side*(x+.012),y+.027,nose_z(x+.012,y+.027)+.018)],.003,led)
-        intake=rounded([(.63,.015),(.86,.008),(.875,.19),(.65,.22)],.025)
-        mesh('Lower corner intake',[(side*x,y,nose_z(x,y)+.006) for x,y in intake],[tuple(range(len(intake)))],black)
-        for y in [.055,.10,.145]:line('Intake louvre',[(side*x,y,nose_z(x,y)+.014) for x in np.linspace(.66,.84,15)],.005,trim)
-    line('Front aluminum protection',[(x,-.108,nose_z(x,-.108)+.008) for x in np.linspace(-.77,.77,70)],.019,chrome)
-    grid('Curved lower front valance',lambda u,v:((-1+2*u)*.83,-.11+.065*v,nose_z((-1+2*u)*.83,-.11+.065*v)+.009),100,12,trim)
-    # Greenhouse: one smooth painted shell with window openings, rather than bars
-    # meeting at sharp corners. Its longitudinal crown follows the actual wagon roof.
-    def cabin_top(z):return curve(z,[(-2.32,.67),(-2.04,1.025),(-1.77,1.09),(-1.1,1.125),(-.2,1.13),(.28,1.09),(.58,.91),(.94,.68)])
+        projected('Dark sculpted headlamp',lamps,lambda x,y:(side*x,y,front_z(x,y)-.006),piano)
+        band('Headlamp perimeter seal',lamps,inset(lamps,.045),lambda x,y:(side*x,y,front_z(x,y)+.001),black)
+        projected('Clear optical cover',lamps,lambda x,y:(side*x,y,front_z(x,y)+.013),lens)
+        for i in range(3):
+            yoff=i*.009;xoff=i*.011
+            pts=[(.511,.371-yoff),(.691,.321-yoff),(.824+xoff,.346-yoff),(.852+xoff,.411)]
+            line('Bent LED light guide',[(side*x,y,front_z(x,y)+.007) for x,y in pts],.0027,led)
+        for x in [.62,.70,.78]:
+            poly=[(x-.026,.371),(x+.026,.378),(x+.024,.396),(x-.026,.389)]
+            projected('Matrix optic reflector',poly,lambda x,y:(side*x,y,front_z(x,y)+.002),chrome)
+        projected('Recessed bumper intake',intakes,lambda x,y:(side*x,y,front_z(x,y)-.024),piano)
+        band('Molded intake surround',intakes,inset(intakes,.10),lambda x,y:(side*x,y,front_z(x,y)+.004),trim)
+        for y in np.linspace(-.035,.115,8):
+            line('Bumper intake vane',[(side*x,y,front_z(x,y)-.012) for x in np.linspace(.65,.825,24)],.0034,trim)
+        for x,y in [(.73,.21),(.84,.23)]:
+            oval('Front parking sensor',(side*x,y,front_z(x,y)+.002),.012,.012,.0012,black)
+        # Bumper recess and silver corners follow its plan-view turn into the side.
+        strip=rounded([(.50,-.102),(.84,-.11),(.883,-.06),(.86,-.073),(.53,-.080)],.009)
+        projected('Swept front silver corner',strip,lambda x,y:(side*x,y,front_z(x,y)+.006),chrome)
+    projected('Lower central air slot',rounded([(-.49,-.084),(.49,-.084),(.43,-.052),(-.43,-.052)],.012),lambda x,y:(x,y,front_z(x,y)+.004),black)
+    projected('Front skid plate',rounded([(-.55,-.148),(.55,-.148),(.60,-.112),(-.60,-.112)],.015),lambda x,y:(x,y,front_z(x,y)+.005),chrome)
+    # Side glass is traced from the factory side elevation. The shorter roof and
+    # long raked rear screen replace the former almost vertical station-wagon tail.
+    def roofline(z):
+        return curve(z,[(-2.23,.665),(-2.17,.704),(-1.85,.977),(-1.70,1.047),(-1.48,1.070),(-.8,1.087),(-.12,1.078),(.05,1.055),(.25,.986),(.52,.850),(.9,.650)])
     def cabin_x(z,y):
-        t=max(0,min(1,(y-.67)/.46));return .868-.176*t+.018*math.sin(t*math.pi)-.010*max(0,(-z-1.6)/.7)
-    windows=[[(.85,.70),(.28,1.055),(-.43,1.075),(-.43,.695)],[(-.50,.695),(-.50,1.075),(-1.30,1.058),(-1.47,.699)],[(-1.55,.704),(-1.39,1.049),(-1.77,1.021),(-2.16,.717)]]
-    holes=[rounded(p,.045) for p in windows]
+        t=max(0,min(1,(y-.665)/.43))
+        return .865-.171*t+.010*math.sin(math.pi*t)-.016*max(0,min(1,(-z-1.6)/.8))
+    windows=[[(.805,.666),(.23,.984),(.07,1.016),(-.22,1.018),(-.153,.684)],
+             [(-.23,.686),(-.30,1.019),(-.95,1.009),(-1.18,.704)],
+             [(-1.26,.707),(-1.07,.998),(-1.42,.979),(-1.91,.730)]]
+    holes=[rounded(p,.032) for p in windows]
     for side in [-1,1]:
-        def side_cabin(u,v):
-            z=-2.32+u*3.26;y=.671+(cabin_top(z)-.671)*v
+        def cabin(u,v):
+            z=-2.23+3.13*u;y=.665+(roofline(z)-.665)*v
             return side*cabin_x(z,y),y,z
-        shell(perforated('Continuous painted greenhouse',side_cabin,180,36,paint,lambda p:any(inside((p.z,p.y),poly) for poly in holes)),.022)
+        shell(perforated('Continuous roof-side pressing',cabin,250,50,paint,lambda p:any(inside((p.z,p.y),poly) for poly in holes)),.012)
         for idx,poly in enumerate(holes):
-            # Glazing is a slightly inset curved patch. Its outline covers the
-            # fine tessellation of the hole beneath a rubber seal.
-            pts=[(side*(cabin_x(z,y)+.003),y,z) for z,y in poly]
-            line('Window rubber seal',pts+[pts[0]],.009,black)
-            mesh('Side glazing',[(side*(cabin_x(z,y)-.006),y,z) for z,y in poly],[tuple(range(len(poly)))],glass if idx==0 else smoked)
-        line('Window chrome upper',[(side*(cabin_x(z,cabin_top(z))+.005),cabin_top(z),z) for z in np.linspace(-2.25,.88,170)],.005,chrome)
-        line('Window chrome sill',[(side*(cabin_x(z,.68)+.003),.68,z) for z in np.linspace(-2.25,.88,130)],.005,chrome)
-        grid('Satin black B pillar',lambda u,v:(side*(cabin_x(-.435-u*.06,.683+v*.404)+.006),.683+v*.404,-.435-u*.06),6,30,piano)
-    # The roof has a crown along both axes and rolls down to meet the side shell.
+            pts=[(side*(cabin_x(z,y)+.002),y,z) for z,y in poly]
+            line('Thin window bonding seal',pts+[pts[0]],.0048,black)
+            projected('Curved side glazing',poly,lambda z,y:(side*(cabin_x(z,y)-.003),y,z),glass if idx==0 else smoked)
+        # A single bright surround frames all the windows; B/C pillars stay black.
+        outer=rounded([(.84,.656),(.25,1.011),(.07,1.037),(-.95,1.033),(-1.44,1.003),(-2.02,.717),(-1.94,.698),(-.15,.665)],.05)
+        pts=[(side*(cabin_x(z,y)+.003),y,z) for z,y in outer]
+        line('Continuous bright window surround',pts+[pts[0]],.0042,chrome)
+        for poly in [[(-.153,.68),(-.22,1.025),(-.30,1.025),(-.23,.68)],[(-1.18,.70),(-.95,1.014),(-1.07,1.01),(-1.26,.704)]]:
+            projected('Gloss black pillar finish',poly,lambda z,y:(side*(cabin_x(z,y)+.004),y,z),piano)
+        # Shoulder rolls gently inward to the glass; no raised chrome ridge.
+        def shoulder(u,v):
+            z=-2.24+3.14*u;yb=belt(z)
+            return side*((1-v)*side_x(z,yb)+v*cabin_x(z,.665)),yb*(1-v)+.665*v,z
+        grid('Shoulder into window sill',shoulder,150,10,paint)
     def roof(u,v):
-        z=.28-v*2.28;t=-1+2*u;edge=cabin_top(z);w=cabin_x(z,edge)
-        return t*w,edge+.036*(1-t*t),z
-    shell(grid('Double curved wagon roof',roof,52,88,paint),.024)
-    grid('Headliner',lambda u,v:(roof(u,v)[0],roof(u,v)[1]-.035,roof(u,v)[2]),28,45,m['headliner'])
-    for rear in [False,True]:
-        def wind(u,v,rear=rear):
+        t=-1+2*u;z=.05-(1.85-.10*t*t)*v;y=roofline(z)
+        return t*cabin_x(z,y),y+.029*(1-t*t),z
+    shell(grid('Low doubly crowned roof',roof,70,90,paint),.015)
+    grid('Cabin headliner',lambda u,v:(roof(u,v)[0],roof(u,v)[1]-.027,roof(u,v)[2]),35,45,m['headliner'])
+    for back in [False,True]:
+        def wind(u,v,back=back):
             t=-1+2*u
-            z=(-2.325+v*.325) if rear else (.94-v*.66)
-            y=(.673+v*.40) if rear else (.686+v*.402)
-            w=(.805-v*.09) if rear else (.812-v*.081)
-            return t*w,y+.009*(1-t*t),z+(.022*(1-t*t))*(-1 if rear else 1)
-        grid('Backlight' if rear else 'Curved windshield',wind,52,28,smoked if rear else glass)
-        for edge in [[wind(i/50,0) for i in range(51)],[wind(i/50,1) for i in range(51)],[wind(0,i/40) for i in range(41)],[wind(1,i/40) for i in range(41)]]:line('Windshield bonding gasket',edge,.009,black)
-        # Broad, smoothly joined pillars and headers eliminate daylight gaps.
+            if back:
+                p=Vector((t*.845,.677,rear_z(t*.845,.677)+.003));q=Vector(roof(u,1))
+                r=p.lerp(q,v);r.z-=.012*(1-t*t)*math.sin(math.pi*v)
+                return tuple(r)
+            z=.90-.85*v
+            y=.650+.405*v
+            w=cabin_x(z,y)-.015
+            return t*w,y+.012*(1-t*t),z+(-1 if back else 1)*.027*(1-t*t)*math.sin(math.pi*v)
+        # Ceramic frit is a border on a curved surface, not a round structural bar.
+        for edge in range(4):
+            def border(u,v,edge=edge):
+                if edge==0:return wind(u,.035*v)
+                if edge==1:return wind(u,1-.045*v)
+                if edge==2:return wind(.025*v,u)
+                return wind(1-.025*v,u)
+            grid('Black ceramic glass border',border,70,6,piano)
+        grid('Raked rear glazing' if back else 'Curved windshield',lambda u,v:wind(.025+.95*u,.034+.922*v),70,45,smoked if back else glass)
         for side in [-1,1]:
-            line('Painted windscreen pillar',[wind(0 if side<0 else 1,i/50) for i in range(51)],.023,paint)
-        line('Windscreen header',[wind(i/50,1) for i in range(51)],.023,paint)
-        if not rear:
-            for x in [-.39,.31]:line('Aero wiper',[(x-.19,.699,.96),(x+.16,.708,.95)],.006,black)
-        else:line('Rear wiper',[(-.33,.724,-2.30),(.12,.724,-2.30)],.006,black)
+            def post(u,v,side=side):
+                p=Vector(wind(0 if side<0 else 1,u));q=Vector((side*cabin_x(p.z,p.y),p.y,p.z))
+                return tuple(p.lerp(q,v))
+            grid('Integrated windscreen pillar',post,90,8,paint)
+        if back:
+            line('Rear screen wiper',[(-.30,.712,rear_z(-.30,.677)+.037),(.12,.712,rear_z(.12,.677)+.037)],.006,black)
+        else:
+            for x in [-.38,.32]:line('Flush aero wiper',[(x-.18,.670,.898),(x+.16,.681,.878)],.005,black)
+    # A sculpted short spoiler continues the roof curvature over the rear screen.
+    def spoiler(u,v):
+        t=-1+2*u;x=t*.717;z=-1.76-.18*v+.10*t*t
+        return x,roofline(-1.80+.10*t*t)+.029*(1-t*t)-.022*v+.008*math.sin(math.pi*v),z
+    shell(grid('Integrated tail spoiler',spoiler,60,14,paint),.018)
+    line('Spoiler stop lamp',[(-.25,1.018,-1.933),(.25,1.018,-1.933)],.004,redled)
+    box('Shark fin antenna',(.042,.055,.112),(0,1.134,-1.48),paint,.019)
     for side in [-1,1]:
+        def rail(u,v):
+            z=-.08-1.53*u;a=v*math.tau;y=roofline(z)+.036+.015*math.sin(math.pi*u)
+            return side*.625+.016*math.cos(a),y+.009*math.sin(a),z
+        grid('Low oval aluminum roof rail',rail,90,12,chrome)
+        for z in [-.08,-1.61]:box('Rail foot',(.033,.031,.10),(side*.625,roofline(z)+.019,z),trim,.014)
+    # A rear deck joins the raked screen to the upper tailgate shoulder.
+    for side in [-1,1]:
+        def deck(u,v):
+            x=side*u*.86;y=.677
+            p=Vector((x,y,rear_z(x,y)+.003));q=Vector((x,.655,rear_z(x,.655)))
+            return tuple(p.lerp(q,v))
+        grid('Rear window to tailgate crown',deck,60,10,paint)
+    tail_lamp=rounded([(.31,.574),(.75,.613),(.906,.623),(.910,.456),(.783,.443),(.355,.514)],.015)
+    for side in [-1,1]:
+        projected('Smoked rear lamp housing',tail_lamp,lambda x,y:(side*x,y,rear_z(x,y)-.005),piano)
+        band('Ruby perimeter of rear lamp',tail_lamp,inset(tail_lamp,.13),lambda x,y:(side*x,y,rear_z(x,y)-.010),red)
+        pts=[(.33,.547),(.75,.548),(.805,.592),(.884,.600),(.857,.484),(.79,.480)]
+        line('Continuous rear light guide',[(side*x,y,rear_z(x,y)-.014) for x,y in pts],.0065,redled)
+        for x in np.linspace(.40,.77,9):
+            y=.505+(x-.40)*.015
+            line('Rear segmented LED',[(side*x,y,rear_z(x,y)-.012),(side*(x-.012),y+.025,rear_z(x-.012,y+.025)-.012)],.0037,redled)
+        # Reflectors, rather than the fictitious exposed chrome exhaust tubes.
+        reflector=rounded([(.48,-.010),(.84,-.014),(.875,.031),(.50,.038)],.018)
+        projected('Rear bumper reflector',reflector,lambda x,y:(side*x,y,rear_z(x,y)-.007),red)
+        for x,y in [(.74,.14),(.34,.15)]:oval('Rear parking sensor',(side*x,y,rear_z(x,y)-.004),.012,.012,.0012,black)
         pts=[]
-        for z in np.linspace(.05,-1.75,65):
-            t=(.05-z)/1.8;pts.append((side*.62,cabin_top(z)+.062+.012*math.sin(t*math.pi),z))
-        line('Integrated roof rail',pts,.014,chrome)
-        for z in [.03,-.83,-1.72]:box('Rail mounting foot',(.034,.04,.085),(side*.62,cabin_top(z)+.039,z),black,.013)
-    box('Rear roof spoiler',(1.43,.035,.17),(0,1.08,-2.015),paint,.017)
-    box('Roof antenna',(.045,.055,.105),(0,1.19,-1.31),paint,.018)
-    line('High brake light',[(-.27,1.063,-2.105),(.27,1.063,-2.105)],.006,redled)
-    # A rounded tailgate and rear quarters with lamps following the same surface.
-    def tail_z(x,y):return -2.44+.08*(abs(x)/.91)**3+curve(y,[(-.12,.070),(-.04,.015),(.14,.0),(.30,.025),(.44,.015),(.58,.028),(.69,.055)])
-    def rear(u,v):
-        t=-1+2*u;y=-.11+v*.79;x=t*(.84+.06*math.sin(v*math.pi))
-        return x,y,tail_z(x,y)
-    shell(grid('Crowned tailgate and rear apron',rear,100,48,paint),.018)
-    for side in [-1,1]:
-        def corner(u,v):
-            y=-.115+(belt(-2.29)+.115)*v;a=Vector((side*skin_x(-2.29,y),y,-2.29));b=Vector(rear(1 if side>0 else 0,v));c=Vector((a.x,(a.y+b.y)/2,b.z))
-            return tuple(a*(1-u)**2+c*2*u*(1-u)+b*u*u)
-        shell(grid('Rounded rear quarter return',corner,20,32,paint),.018)
-        poly=rounded([(.28,.505),(.84,.47),(.875,.605),(.30,.60)],.014)
-        pts=[(side*x,y,tail_z(x,y)-.008) for x,y in poly]
-        projected('Tail lamp ruby lens',poly,lambda x,y:(side*x,y,tail_z(x,y)-.009),red)
-        line('Rear light guide',[(side*x,y,tail_z(x,y)-.018) for x,y in [(.30,.571),(.81,.551),(.84,.50)]],.006,redled)
-        for x in np.linspace(.34,.78,8):line('Rear light segment',[(side*x,.52,tail_z(x,.52)-.018),(side*(x+.012),.55,tail_z(x+.012,.55)-.018)],.004,redled)
-        box('Rear exhaust trim',(.24,.046,.025),(side*.64,-.055,tail_z(.64,-.055)-.01),chrome,.019)
-        box('Rear exhaust mouth',(.20,.025,.012),(side*.64,-.055,tail_z(.64,-.055)-.026),black,.010)
-    line('Tailgate bright strip',[(x,.50,tail_z(x,.50)-.017) for x in np.linspace(-.80,.80,100)],.005,chrome)
-    for side in [-1,1]:
-        line('Tailgate shutline',[(side*x,y,tail_z(x,y)-.002) for x,y in [(.79,.64),(.78,.44),(.74,.20),(.68,.14),(0,.14)]],.0017,black)
-    for x in [-.105,-.035,.035,.105]:oval('Tailgate four rings',(x,.61,tail_z(0,.61)-.016),.051,.032,.0045,chrome)
-    box('Rear model plate',(.47,.087,.014),(0,.32,-2.447),black,.006)
-    text('Rear number plate','A6 allroad',(0,.32,-2.458),.043,chrome,False)
-    text('A6 badge','A6',(.67,.38,tail_z(.67,.38)-.012),.037,chrome,False)
-    text('allroad badge','allroad',(-.62,.38,tail_z(.62,.38)-.012),.027,chrome,False)
-    line('Rear bumper cladding',[(x,-.02,tail_z(x,-.02)+.005) for x in np.linspace(-.82,.82,100)],.045,trim)
-    line('Rear aluminum skid',[(x,-.106,tail_z(x,-.106)-.006) for x in np.linspace(-.65,.65,70)],.019,chrome)
-    box('Engine compartment liner',(1.48,.13,1.40),(0,.39,1.35),black,.025)
+        for x,y in [(.66,.67),(.655,.56),(.64,.37),(.61,.27),(.54,.225),(0,.225)]:
+            pts.append((side*x,y,rear_z(x,y)-.002))
+        line('Tailgate opening line',pts,.0016,black)
+        text('A6 rear badge' if side>0 else 'allroad rear badge','A6' if side>0 else 'allroad',(side*.54,.34,rear_z(.54,.34)-.010),.038 if side>0 else .025,chrome,False)
+    line('Rear aluminum light bridge',[(x,.550,rear_z(x,.550)-.010) for x in np.linspace(-.83,.83,120)],.004,chrome)
+    for cx in [-.12,-.04,.04,.12]:
+        pts=[]
+        for a in np.linspace(0,math.tau,65):
+            x=cx+.055*math.cos(a);y=.627+.038*math.sin(a)
+            pts.append((x,y,rear_z(x,y)-.013))
+        line('Tailgate four rings',pts,.004,chrome)
+    box('Rear plate surround',(.535,.115,.015),(0,.385,rear_z(0,.385)-.008),black,.009)
+    box('Rear registration plate',(.515,.098,.007),(0,.385,rear_z(0,.385)-.019),chrome,.004)
+    text('Rear registration lettering','A6 allroad',(0,.385,rear_z(0,.385)-.024),.050,black,False)
+    grid('Rear lower molded valance',lambda u,v:((-1+2*u)*.875,-.151+.095*v,rear_z((-1+2*u)*.875,-.151+.095*v)-.007),120,18,trim)
+    strip=rounded([(-.84,-.045),(-.48,-.038),(-.39,.002),(.39,.002),(.48,-.038),(.84,-.045),(.86,-.014),(.49,-.010),(.39,.033),(-.39,.033),(-.49,-.010),(-.86,-.014)],.012)
+    projected('Shaped rear silver bumper strip',strip,lambda x,y:(x,y,rear_z(x,y)-.011),chrome)
+    guard=rounded([(-.56,-.135),(.56,-.135),(.40,-.064),(-.40,-.064)],.02)
+    projected('Rear underbody aluminum guard',guard,lambda x,y:(x,y,rear_z(x,y)-.012),chrome)
+    box('Engine bay dark enclosure',(1.43,.10,1.25),(0,.27,1.38),black,.025)

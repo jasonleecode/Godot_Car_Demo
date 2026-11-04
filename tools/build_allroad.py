@@ -27,8 +27,8 @@ rubber=material('235 55 R18 tire rubber',(.015,.018,.020),.87)
 chrome=material('Brushed aluminum',(.52,.58,.62),.25,.88)
 alloy=material('Machined alloy spokes',(.42,.47,.51),.23,.88)
 wheelblack=material('Graphite wheel pockets',(.043,.052,.06),.38,.65)
-glass=material('Clear tinted glazing',(.20,.30,.32),.09,0,.16)
-smoked=material('Rear privacy glazing',(.055,.082,.085),.12,0,.34)
+glass=material('Clear tinted glazing',(.055,.085,.092),.08,0,.25)
+smoked=material('Rear privacy glazing',(.025,.041,.044),.10,0,.52)
 lens=material('Headlamp lens',(.55,.68,.74),.07,0,.15)
 led=material('Matrix LED',(.77,.91,1),.18,.15,emission=2.4)
 red=material('Tail lamp ruby',(.42,.006,.013),.22,.1,coat=.7)
@@ -161,8 +161,8 @@ for a in [0,math.pi,math.pi*1.5]:
  line('Steering spoke',[center,end],.015,chrome)
 box('Steering hub',(.135,.095,.055),center,leather,.023)
 for x in [.354,.378,.402,.426]:oval('Steering Audi ring',(x,.536,.234),.018,.012,.002,chrome)
-box('Interior mirror',(.22,.065,.035),(0,.97,.58),piano,.014)
-box('Mirror reflective face',(.20,.047,.004),(0,.97,.557),chrome,.008)
+box('Interior mirror',(.22,.065,.035),(0,.94,.34),piano,.014)
+box('Mirror reflective face',(.20,.047,.004),(0,.94,.317),chrome,.008)
 # Wheels use independent yaw / roll nodes, with measured nominal tire dimensions.
 def lathe(name,profile,mat,parent):
  verts=[];faces=[];n=128

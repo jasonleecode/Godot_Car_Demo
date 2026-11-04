@@ -12,15 +12,27 @@ func run() -> void:
 	var normals := {}
 	var roughness := {}
 	var glazing := false
+	var front_extent := -INF
+	var rear_extent := INF
+	var roof_height := -INF
 	for node in visual.model.find_children("*","MeshInstance3D",true,false):
 		for surface in range(node.mesh.get_surface_count()):
 			var mat: StandardMaterial3D = node.get_active_material(surface)
+			for point in node.mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]:
+				var local: Vector3 = visual.global_transform.affine_inverse()*node.global_transform*point
+				front_extent = maxf(front_extent,local.z)
+				rear_extent = minf(rear_extent,local.z)
+				roof_height = maxf(roof_height,local.y)
 			if mat.normal_enabled and mat.normal_texture: normals[mat.normal_texture.get_rid()] = true
 			if mat.roughness_texture: roughness[mat.roughness_texture.get_rid()] = true
 			if "clear tinted glazing" in mat.resource_name.to_lower():
 				glazing = mat.transparency==BaseMaterial3D.TRANSPARENCY_ALPHA and mat.albedo_color.a<0.3
 	check(normals.size()>=4 and roughness.size()>=3,"normal and roughness textures reach the runtime materials")
 	check(glazing,"window glazing remains transparent")
+	print("BODY front=",front_extent," rear=",rear_extent," height above wheel centre=",roof_height)
+	check(absf(front_extent-2.3835)<0.04,"front overhang matches the factory 921 mm within trim tolerance")
+	check(absf(rear_extent+2.5675)<0.04,"rear overhang matches the factory 1105 mm within trim tolerance")
+	check(roof_height>1.08 and roof_height<1.18,"roof and rails stay inside the factory height envelope")
 	for i in range(4):
 		var rotor: Node3D = visual.rotors[i]
 		var radius := 0.0

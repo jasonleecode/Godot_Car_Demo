@@ -32,6 +32,8 @@ func prepare_materials(node: Node) -> void:
 					mat.clearcoat_enabled = true
 					mat.clearcoat = 0.85
 					mat.clearcoat_roughness = 0.12
+				elif source.resource_name.to_lower() == "headliner":
+					mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 				node.set_surface_override_material(i,mat)
 	for child in node.get_children():
 		prepare_materials(child)
