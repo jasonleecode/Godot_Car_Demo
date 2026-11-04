@@ -8,6 +8,7 @@ mass = 1800.0
 center_of_mass_mode = 1
 center_of_mass = Vector3(0, 0.36, 0)
 continuous_cd = true
+linear_damp_mode = 1
 linear_damp = 0.04
 angular_damp = 0.45
 script = ExtResource("1")

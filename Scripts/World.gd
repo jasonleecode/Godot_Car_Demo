@@ -7,6 +7,8 @@ var spawn := Transform3D(Basis(Vector3.UP,PI+0.28),Vector3(5.58,0.9,4.54))
 var camera: VehicleCamera
 var camera_label: Label
 var speed_label: Label
+var parking_label: Label
+var parking_message_until := 0
 var gear_label: Label
 var suspension_label: Label
 var suspension_panel: VBoxContainer
@@ -58,13 +60,18 @@ func build_hud() -> void:
 	title.add_theme_font_size_override("font_size",26)
 	v.add_child(title)
 	var help := Label.new()
-	help.text = "WASD / 方向键  驾驶    SPACE  刹车\nESC  复位    R  %s    G  选车 / 场景\n鼠标左 / 右键拖拽  旋转    滚轮  缩放" % ("高低速四驱" if car.has_method("reset_suspension") else "换挡")
+	var gear_help: String = car.gear_help() if car.has_method("gear_help") else ("高低速四驱" if car.has_method("reset_suspension") else "换挡")
+	help.text = "WASD / 方向键  驾驶    SPACE  刹车    P  驻车\nESC  复位    R  %s    G  选车 / 场景\n鼠标左 / 右键拖拽  旋转    滚轮  缩放" % gear_help
 	help.add_theme_font_size_override("font_size",19)
 	help.add_theme_color_override("font_color",Color("bcc8b7"))
 	v.add_child(help)
 	camera_label = Label.new()
 	camera_label.add_theme_font_size_override("font_size",19)
 	v.add_child(camera_label)
+	parking_label = Label.new()
+	parking_label.add_theme_font_size_override("font_size",19)
+	parking_label.add_theme_color_override("font_color",Color("efd39b"))
+	v.add_child(parking_label)
 	var button := Button.new()
 	button.text = "选车 / 场景  ↗"
 	button.add_theme_font_size_override("font_size",18)
@@ -109,12 +116,16 @@ func _physics_process(delta: float) -> void:
 		return
 	speed_label.text = "%02d km/h" % roundi(car.linear_velocity.length()*3.6)
 	if car.has_method("reset_suspension"):
-		gear_label.text = "4L · 低速攀爬" if car.low_range else "4H · 全地形"
+		gear_label.text = car.drive_label() if car.has_method("drive_label") else ("4L · 低速攀爬" if car.low_range else "4H · 全地形")
 		for i in range(4):
 			suspension_bars[i].value = clampf((0.69-float(car.lengths[i]))/(0.69-car.suspension_min_length)*100,0,100)
 			suspension_bars[i].modulate = Color("dbc38e") if car.contacts[i] else Color("758079")
 	else:
 		gear_label.text = "RWD · 挡位 %d" % car.gearshift
+	if car.is_parked():
+		gear_label.text = "P · 驻车"
+	if Time.get_ticks_msec()>parking_message_until:
+		parking_label.text = "P 驻车已开启 · 再按 P 解除" if car.is_parked() else "停车后按 P · 坡道驻车"
 	if camera:
 		camera.update_camera(delta)
 		camera_label.text = "V  切换视角：%s    C  还原视角" % camera.VIEW_NAMES[camera.view]
@@ -125,7 +136,10 @@ func get_camera_ground_height(_x: float, _z: float) -> float:
 	return -INF
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("reset"):
+	if event.is_action_pressed("park"):
+		parking_label.text = car.toggle_parking()
+		parking_message_until = Time.get_ticks_msec()+3000
+	elif event.is_action_pressed("reset"):
 		reset_car()
 	elif event.is_action_pressed("camera_next"):
 		camera.cycle_view()
@@ -139,6 +153,7 @@ func reset_car() -> void:
 	car.linear_velocity = Vector3.ZERO
 	car.angular_velocity = Vector3.ZERO
 	car.sleeping = false
+	car.reset_parking_anchor()
 	if car.has_method("reset_suspension"):
 		car.reset_suspension()
 	if camera:

@@ -93,7 +93,7 @@ func build_water_feedback() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	terrain_status = Label.new()
-	terrain_status.position = Vector2(36,325)
+	terrain_status.position = Vector2(36,360)
 	terrain_status.add_theme_font_size_override("font_size",22)
 	terrain_status.add_theme_color_override("font_color",Color("fff1cd"))
 	terrain_status.add_theme_color_override("font_shadow_color",Color("243d35"))

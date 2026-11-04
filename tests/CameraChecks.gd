@@ -36,7 +36,7 @@ func motion(relative: Vector2) -> void:
 func run() -> void:
 	var garage := root.get_node("Garage")
 	for location in range(garage.LOCATIONS.size()):
-		for vehicle in range(3):
+		for vehicle in range(garage.VEHICLES.size()):
 			garage.drive(vehicle,location)
 			await frames(120)
 			var world = current_scene

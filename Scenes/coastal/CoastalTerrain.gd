@@ -1,8 +1,11 @@
 extends Node3D
-## A continuous island road: shared geometry in the menu preview and playable scene.
+## A compact, Laoshan-inspired mountain coast; not a survey or one-to-one road replica.
 const ROAD_HALF := 5.5
-const SPAWN_ANGLE := -0.62
-const EXTENT := 310.0
+const SPAWN_ANGLE := -1.1816
+const EXTENT := 900.0
+const ROAD_SEGMENTS := 1440
+const VILLAGES := [5.10,0.40,3.80]
+const TEA_GARDENS := [5.55,1.75,3.40]
 @export var preview_mode := false
 var rng := RandomNumberGenerator.new()
 var road_mesh: ArrayMesh
@@ -12,10 +15,16 @@ var house_count := 0
 var batches: Dictionary = {}
 var materials: Dictionary = {}
 var terrain_noise := FastNoiseLite.new()
+var height_texture: ImageTexture
+var rock_count := 0
+var tea_row_count := 0
+var terrain_mesh: ArrayMesh
 
 static func road_point(angle: float) -> Vector3:
-	var radius := 185.0+22.0*sin(angle*2)+12.0*sin(angle*3+0.7)
-	return Vector3(radius*cos(angle),5.5+1.6*sin(angle*2-0.4)+0.8*cos(angle*3),radius*sin(angle)*0.85)
+	# Broad headlands alternate with tight coves; harmonics introduce genuine S bends.
+	var radius := 400.0+65*sin(angle*3+0.4)+35*sin(angle*5-0.7)+18*sin(angle*7)
+	var height := 50.0+25*sin(angle-0.4)+15*sin(angle*2+0.8)
+	return Vector3(radius*cos(angle),height,radius*sin(angle)*0.85)
 
 static func road_forward(angle: float) -> Vector3:
 	var tangent := road_point(angle+0.001)-road_point(angle-0.001)
@@ -29,41 +38,68 @@ static func road_outward(angle: float) -> Vector3:
 static func closest_angle(x: float, z: float) -> float:
 	var angle := atan2(z/0.85,x)
 	var point := Vector3(x,0,z)
-	# Project onto the smooth centerline instead of approximating distance with a circle.
-	for i in range(3):
+	for i in range(5):
 		var center := road_point(angle)
 		var derivative := (road_point(angle+0.001)-road_point(angle-0.001))/0.002
 		derivative.y = 0
 		var difference := point-center
 		difference.y = 0
-		angle += difference.dot(derivative)/derivative.length_squared()
+		angle += clampf(difference.dot(derivative)/derivative.length_squared(),-0.07,0.07)
 	return angle
 
 static func road_distance(x: float, z: float) -> float:
 	var angle := closest_angle(x,z)
 	return (Vector3(x,0,z)-road_point(angle)).dot(road_outward(angle))
 
+static func angular_distance(a: float, b: float) -> float:
+	return absf(wrapf(a-b,-PI,PI))
+
+static func bay_factor(angle: float) -> float:
+	return pow(0.5+0.5*sin(angle*3-0.8),3)
+
+static func mountain_height(x: float, z: float) -> float:
+	var height := 24.0
+	for peak in [Vector4(-115,60,165,135),Vector4(65,-100,150,115),Vector4(155,140,195,105),Vector4(-220,-155,140,125),Vector4(-495,90,170,155)]:
+		height += peak.z*exp(-Vector2(x-peak.x,z-peak.y).length_squared()/(peak.w*peak.w))
+	var ridge := absf(sin(x*0.028+sin(z*0.012)*2))*absf(cos(z*0.023-x*0.009))
+	return height+ridge*16+sin(x*0.13)*cos(z*0.16)*2.8
+
 static func height_at(x: float, z: float) -> float:
 	var angle := closest_angle(x,z)
 	var road := road_point(angle)
 	var outward := (Vector3(x,0,z)-road).dot(road_outward(angle))
 	if outward>0:
-		return lerpf(road.y,-1.8,smoothstep(8,40,outward))-maxf(0,outward-45)*0.035
+		# Short, steep rock faces on headlands; long low beaches inside the bays.
+		var beach := bay_factor(angle)
+		var width := lerpf(23,105,beach)
+		var h := lerpf(road.y-0.18,-2.0,smoothstep(8,width,outward))-maxf(0,outward-width)*0.16
+		var rock_relief := sin(x*0.24)*sin(z*0.19)*2.8+cos(x*0.11+z*0.17)*1.6
+		h += rock_relief*smoothstep(9,15,outward)*(1-smoothstep(width-6,width+8,outward))
+		# An inland mountain neck breaks the old isolated oval-island silhouette.
+		var neck := smoothstep(0.65,0.94,cos(angle-PI))*(1-smoothstep(145,360,outward))
+		return lerpf(h,mountain_height(x,z),neck*smoothstep(8,45,outward))
 	var inland := -outward
-	var hills := 14.0+12.0*sin(x*0.019+0.4)*cos(z*0.022)+15.0*exp(-Vector2(x+30,z-30).length_squared()/6000.0)
-	var rough := sin(x*0.33)*cos(z*0.27)*0.45
-	return road.y+smoothstep(10,90,inland)*(hills+rough)
+	var natural := mountain_height(x,z)
+	var h := lerpf(road.y-0.18,natural,smoothstep(8,65,inland))
+	for garden in TEA_GARDENS:
+		var weight := (1-smoothstep(0.12,0.21,angular_distance(angle,garden)))*smoothstep(24,35,inland)*(1-smoothstep(100,125,inland))
+		var terrace := floorf(h/3.0)*3+smoothstep(0.78,1.0,fposmod(h/3.0,1.0))*3
+		h = lerpf(h,terrace,weight)
+	return h
 
 func _ready() -> void:
 	rng.seed = 541297
 	terrain_noise.seed = 926
 	terrain_noise.frequency = 0.05
 	build_ground()
+	build_road_bed()
 	build_road()
 	build_ocean()
 	build_village()
 	build_trees()
-	build_mountains()
+	build_rocks()
+	build_tea_gardens()
+	build_viewpoints()
 	flush_batches()
 
 func material(key: String, color: String, metallic := 0.0, roughness := 0.8) -> StandardMaterial3D:
@@ -130,42 +166,82 @@ func box(key: String, size: Vector3, transform: Transform3D, mat: Material, coll
 		body.add_child(shape)
 		add_child(body)
 
-func ground_color(x: float, z: float, h: float) -> Color:
-	var distance := road_distance(x,z)
+func ground_color(x: float, z: float, h: float, slope: float = 0.0) -> Color:
 	var variation := terrain_noise.get_noise_2d(x,z)*0.5+0.5
-	var grass := Color("69884b").lerp(Color("b1b76c"),variation)
-	if distance>8:
-		return grass.lerp(Color("d4c99b"),smoothstep(8,27,distance))
-	if absf(distance)<8:
-		return Color("a9aa8c")
-	return grass.lerp(Color("819063"),smoothstep(25,50,h)*0.4)
+	var grass := Color("3c583c").lerp(Color("718553"),variation)
+	var granite := Color("8f8e82").lerp(Color("bab6a5"),variation)
+	if h<2.5:
+		return Color("c1b894").lerp(granite,smoothstep(0.25,0.8,slope))
+	var rock := maxf(smoothstep(0.85,1.9,slope),smoothstep(135,230,h)*0.55)
+	return grass.lerp(granite,rock)
 
 func build_ground() -> void:
-	var step := 8.0 if preview_mode else 3.0
-	var count := int(EXTENT*2/step)
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var count := 120 if preview_mode else 300
+	var step := EXTENT*2/count
+	var vertices := PackedVector3Array()
+	var heights := PackedFloat32Array()
+	var distances := PackedFloat32Array()
 	for z in range(count+1):
 		for x in range(count+1):
 			var px := -EXTENT+x*step
 			var pz := -EXTENT+z*step
 			var h := height_at(px,pz)
-			surface.set_color(ground_color(px,pz,h))
-			surface.set_normal(Vector3(height_at(px-0.4,pz)-height_at(px+0.4,pz),0.8,height_at(px,pz-0.4)-height_at(px,pz+0.4)).normalized())
-			surface.add_vertex(Vector3(px,h,pz))
+			vertices.append(Vector3(px,h,pz))
+			heights.append(h)
+			distances.append(absf(road_distance(px,pz)))
+	var height_image := Image.create_from_data(count+1,count+1,false,Image.FORMAT_RF,heights.to_byte_array())
+	height_texture = ImageTexture.create_from_image(height_image)
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for z in range(count+1):
+		for x in range(count+1):
+			var index := z*(count+1)+x
+			var dx := heights[z*(count+1)+maxi(x-1,0)]-heights[z*(count+1)+mini(x+1,count)]
+			var dz := heights[maxi(z-1,0)*(count+1)+x]-heights[mini(z+1,count)*(count+1)+x]
+			var normal := Vector3(dx,step*2,dz).normalized()
+			var point := vertices[index]
+			surface.set_color(ground_color(point.x,point.z,point.y,Vector2(dx,dz).length()/(step*2)))
+			surface.set_normal(normal)
+			surface.add_vertex(point)
 	for z in range(count):
 		for x in range(count):
 			var a := z*(count+1)+x
+			# An exact, finely sampled road bed replaces coarse triangles near the tarmac.
+			if (not preview_mode and minf(minf(distances[a],distances[a+1]),minf(distances[a+count+1],distances[a+count+2]))<12) or (preview_mode and (distances[a]+distances[a+1]+distances[a+count+1]+distances[a+count+2])/4<12):
+				continue
 			for i in [a,a+1,a+count+1,a+1,a+count+2,a+count+1]:
 				surface.add_index(i)
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.vertex_color_is_srgb = true
-	mat.roughness = 0.96
-	mesh_node(surface.commit(),mat,"CoastalHills",true)
+	var mat := ShaderMaterial.new()
+	mat.shader = preload("res://Scenes/coastal/CoastalGround.gdshader")
+	materials["terrain"] = mat
+	terrain_mesh = surface.commit()
+	mesh_node(terrain_mesh,mat,"GraniteMountainCoast",true)
+
+func build_road_bed() -> void:
+	var count := 360 if preview_mode else ROAD_SEGMENTS
+	var offsets := [-30.0,-24.0,-18.0,-12.0,-9.0,-7.0,0.0,7.0,9.0,12.0,18.0,24.0,30.0]
+	var width := offsets.size()
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(count+1):
+		var angle := TAU*i/count
+		for offset in offsets:
+			var point: Vector3 = road_point(angle)+road_outward(angle)*offset
+			point.y = height_at(point.x,point.z)
+			var dx := height_at(point.x-0.4,point.z)-height_at(point.x+0.4,point.z)
+			var dz := height_at(point.x,point.z-0.4)-height_at(point.x,point.z+0.4)
+			surface.set_color(ground_color(point.x,point.z,point.y,Vector2(dx,dz).length()/0.8))
+			surface.set_normal(Vector3(dx,0.8,dz).normalized())
+			surface.add_vertex(point)
+	for i in range(count):
+		for j in range(width-1):
+			var a := i*width+j
+			for index in [a,a+1,a+width,a+1,a+width+1,a+width]:
+				surface.add_index(index)
+	mesh_node(surface.commit(),materials["terrain"],"MountainRoadBed",true)
 
 func ribbon(from: float, to: float, lift: float, mat: Material, node_name: String, collision := false) -> ArrayMesh:
-	var count := 240 if preview_mode else 720
+	var count := 360 if preview_mode else ROAD_SEGMENTS
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in range(count+1):
@@ -209,8 +285,8 @@ func build_road() -> void:
 	var marking_distance := 0.0
 	var post_distance := 0.0
 	var lamps_distance := 0.0
-	for i in range(1,721):
-		var angle := TAU*i/720
+	for i in range(1,ROAD_SEGMENTS+1):
+		var angle := TAU*i/ROAD_SEGMENTS
 		var point := road_point(angle)
 		var segment := point.distance_to(previous)
 		road_length += segment
@@ -219,8 +295,8 @@ func build_road() -> void:
 		lamps_distance += segment
 		var middle := (point+previous)*0.5
 		var tangent := (point-previous).normalized()
-		var normal := road_outward(angle-TAU/1440)
-		var basis := Basis(normal,Vector3.UP,tangent).orthonormalized()
+		var normal := road_outward(angle-TAU/(ROAD_SEGMENTS*2))
+		var basis := Basis(normal,tangent.cross(normal).normalized(),tangent)
 		if fmod(marking_distance,9)<4.5:
 			box("CenterDashes",Vector3(0.14,0.012,segment+0.02),Transform3D(basis,middle+Vector3.UP*0.16),yellow)
 		# A continuous barrier, with overlapping collision segments at bends.
@@ -229,7 +305,7 @@ func build_road() -> void:
 			post_distance = 0
 			box("GuardrailPosts",Vector3(0.12,1.15,0.13),Transform3D(basis,point+normal*6.15+Vector3.UP*0.57),post_mat)
 			box("Reflectors",Vector3(0.15,0.12,0.10),Transform3D(basis,point+normal*6.05+Vector3.UP*0.95),white)
-		if lamps_distance>42:
+		if lamps_distance>65 and in_village(angle):
 			lamps_distance = 0
 			var base := point-normal*7.5
 			box("LampPosts",Vector3(0.12,7.2,0.12),Transform3D(Basis.IDENTITY,base+Vector3.UP*3.6),post_mat)
@@ -239,34 +315,46 @@ func build_road() -> void:
 
 func build_ocean() -> void:
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(4000,4000)
+	plane.size = Vector2(14000,14000)
 	plane.subdivide_width = 80
 	plane.subdivide_depth = 80
 	var sea := ShaderMaterial.new()
 	sea.shader = preload("res://Scenes/coastal/Sea.gdshader")
+	sea.set_shader_parameter("height_map",height_texture)
+	sea.set_shader_parameter("terrain_extent",EXTENT)
 	mesh_node(plane,sea,"TurquoiseSea")
 
 func build_village() -> void:
 	var plaster := material("plaster","ece8d5")
 	var timber := material("timber","554738")
 	var stone := material("stone","999b8c")
-	var roof_mat := material("roof","344c5d",0.35,0.53)
+	var roof_mat := material("roof","a6553e",0.0,0.88)
 	var glass := material("glass","446b7c",0.5,0.16)
 	var flower := material("flowers","c97f6b")
 	var curb := material("curb","c5c5ad")
-	for i in range(19):
-		var angle := -0.85+i*0.29
+	for i in range(42):
+		var cluster := int(i/14)
+		var row := int((i%14)/7)
+		var angle: float = VILLAGES[cluster]+(i%7-3)*0.028
 		var normal := road_outward(angle)
 		var forward := road_forward(angle)
-		var p := road_point(angle)-normal*19
-		p.y = height_at(p.x,p.z)
+		var p := road_point(angle)-normal*(19+row*20)
+		var low := INF
+		var high := -INF
+		for corner in [Vector2(-5,-4),Vector2(-5,4),Vector2(5,-4),Vector2(5,4)]:
+			var foot: Vector3 = p+forward*corner.x+normal*corner.y
+			var h := height_at(foot.x,foot.z)
+			low = minf(low,h)
+			high = maxf(high,h)
+		p.y = high-0.15
+		var foundation_height := maxf(2.2,high-low+1.2)
 		var basis := Basis(-forward,Vector3.UP,normal)
 		var origin := Transform3D(basis,p)
 		var width := rng.randf_range(7,10)
 		var depth := rng.randf_range(6,8)
 		var height := 6.0 if i%3!=1 else 3.4
 		house_count += 1
-		box("HouseFoundations",Vector3(width+1.2,2.2,depth+1.2),origin.translated_local(Vector3(0,-0.8,0)),stone,true)
+		box("HouseFoundations",Vector3(width+1.2,foundation_height,depth+1.2),origin.translated_local(Vector3(0,0.3-foundation_height/2,0)),stone,true)
 		box("VillageWalls",Vector3(width,height,depth),origin.translated_local(Vector3(0,height/2,0)),plaster,true)
 		for x in [-width/2+0.09,width/2-0.09]:
 			box("CornerTimbers",Vector3(0.17,height+0.1,0.17),origin.translated_local(Vector3(x,height/2,depth/2+0.04)),timber)
@@ -275,8 +363,8 @@ func build_village() -> void:
 		for side in [-1,1]:
 			var roof_transform := origin.translated_local(Vector3(side*(width/4+0.25),height+rise/2,0))
 			roof_transform.basis = basis*Basis(Vector3.BACK,-side*slope)
-			box("SlateRoofs",Vector3((width/2+0.5)/cos(slope),0.20,depth+1.1),roof_transform,roof_mat)
-			# Narrow raised seams catch sunlight along the standing-seam roof.
+			box("RedTileRoofs",Vector3((width/2+0.5)/cos(slope),0.20,depth+1.1),roof_transform,roof_mat)
+			# Raised rows suggest the traditional red clay roof tiles.
 			for seam in range(12):
 				var strip := roof_transform.translated_local(Vector3(0,0.12,-depth/2+seam*depth/11))
 				box("RoofSeams",Vector3((width/2+0.5)/cos(slope),0.035,0.025),strip,roof_mat)
@@ -322,7 +410,7 @@ func build_village() -> void:
 	if not preview_mode:
 		var sign := Label3D.new()
 		sign.name = "CoastalRouteSign"
-		sign.text = "滨海道路\nCOASTAL DRIVE\n环岛公路 · 海风山景"
+		sign.text = "崂山印象\nMOUNTAIN COAST\n依山临海 · 弯多慢行"
 		sign.font_size = 36
 		sign.pixel_size = 0.010
 		sign.modulate = Color("f2efdb")
@@ -355,16 +443,22 @@ func build_trees() -> void:
 		add_child(collisions)
 	else:
 		collisions.free()
-	for i in range(650 if not preview_mode else 260):
-		var x := rng.randf_range(-205,205)
-		var z := rng.randf_range(-190,190)
+	for i in range(10500 if not preview_mode else 2800):
+		var x := rng.randf_range(-690,500)
+		var z := rng.randf_range(-460,470)
 		var inland := -road_distance(x,z)
-		if inland<29 or inland>155:
+		if inland<15 and not (x<-450 and height_at(x,z)>15):
+			continue
+		var tree_angle := closest_angle(x,z)
+		if (in_village(tree_angle) and inland<65) or in_tea_garden(tree_angle,inland):
 			continue
 		var p := Vector3(x,height_at(x,z),z)
-		var height := rng.randf_range(5.5,10)
-		var width := rng.randf_range(2.8,4.3)
-		var tint := Color("3c6b37").lerp(Color("8fa958"),rng.randf())
+		var slope := Vector2(height_at(x+2,z)-height_at(x-2,z),height_at(x,z+2)-height_at(x,z-2)).length()/4
+		if p.y<3 or slope>1.25 or (p.y>150 and rng.randf()<0.65):
+			continue
+		var height := rng.randf_range(6.5,11)
+		var width := rng.randf_range(3.6,5.6)
+		var tint := Color("315739").lerp(Color("688547"),rng.randf())
 		tree_count += 1
 		batch("BroadleafTrunks",trunk_mesh,bark,Transform3D(Basis.IDENTITY.scaled(Vector3(1,height*0.65,1)),p+Vector3.UP*height*0.325))
 		for lobe in range(6):
@@ -390,36 +484,106 @@ func build_trees() -> void:
 		var size := rng.randf_range(0.35,1.0)
 		batch("CoastalScrub",leaf_mesh,foliage,Transform3D(Basis.IDENTITY.scaled(Vector3(size*1.5,size,size)),p+Vector3.UP*size*0.5),Color("899862"))
 
-func build_mountains() -> void:
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.vertex_color_is_srgb = true
-	mat.roughness = 1
-	# Distant mainland peaks across the water. They are scenery beyond the driving area.
-	for peak in range(9):
-		var center := Vector3(-780+peak*185,0,680+sin(peak*2.0)*110)
-		var height := 155+sin(peak*1.6)*70+peak*7
-		var radius := 175.0+peak*5
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var rings := 24
-		var segments := 56
-		for ring in range(rings+1):
-			var r := float(ring)/rings
-			for segment in range(segments+1):
-				var angle := TAU*segment/segments
-				var ridge := sin(angle*7+peak)*sin(r*12+angle*3)*0.14+sin(angle*11)*0.08
-				var y := pow(1-r,1.35)*height*(1+ridge*minf(r*5,1))
-				var pos := center+Vector3(cos(angle)*r*radius,y,sin(angle)*r*radius)
-				var color := Color("647d83").lerp(Color("889598"),y/height)
-				if y>height*(0.60+sin(angle*9+r*25)*0.07):
-					color = Color("e3ece9")
-				surface.set_color(color)
-				surface.add_vertex(pos)
-		for ring in range(rings):
-			for segment in range(segments):
-				var a := ring*(segments+1)+segment
-				for index in [a,a+segments+1,a+1,a+1,a+segments+1,a+segments+2]:
-					surface.add_index(index)
-		surface.generate_normals()
-		mesh_node(surface.commit(),mat,"SnowPeak_%d" % peak)
+static func in_village(angle: float) -> bool:
+	for center in VILLAGES:
+		if angular_distance(angle,center)<0.14:
+			return true
+	return false
+
+static func in_tea_garden(angle: float, inland: float) -> bool:
+	for center in TEA_GARDENS:
+		if angular_distance(angle,center)<0.19 and inland>26 and inland<122:
+			return true
+	return false
+
+func rock_mesh() -> ArrayMesh:
+	var sphere := SphereMesh.new()
+	sphere.radius = 1
+	sphere.height = 2
+	sphere.radial_segments = 12
+	sphere.rings = 7
+	var arrays := sphere.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	for i in range(vertices.size()):
+		var p := vertices[i]
+		var noise := sin(p.x*6+p.y*3)*cos(p.z*5-p.x*2)*0.12+sin(p.z*11+p.y*7)*0.04
+		vertices[i] *= 1+noise
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
+	var surface := SurfaceTool.new()
+	surface.create_from(mesh,0)
+	surface.generate_normals()
+	return surface.commit()
+
+func build_rocks() -> void:
+	var mesh := rock_mesh()
+	var granite := ShaderMaterial.new()
+	granite.shader = preload("res://Scenes/coastal/Granite.gdshader")
+	var collisions := StaticBody3D.new()
+	collisions.name = "GraniteOutcropsCollision"
+	if not preview_mode:
+		add_child(collisions)
+	else:
+		collisions.free()
+	for i in range(580 if not preview_mode else 240):
+		var angle := rng.randf_range(0,TAU)
+		var offset := rng.randf_range(12,90) if i%3==0 else rng.randf_range(-260,-20)
+		var point := road_point(angle)+road_outward(angle)*offset
+		point.y = height_at(point.x,point.z)
+		if point.y < -1.5 or (offset<0 and (in_village(angle) or in_tea_garden(angle,-offset))):
+			continue
+		var radius := rng.randf_range(2.2,6.5) if offset>0 else rng.randf_range(3,12)
+		var scale := Vector3(radius,radius*rng.randf_range(0.6,1.3),radius*rng.randf_range(0.7,1.15))
+		point.y += scale.y*0.18
+		var rotation := Basis(Vector3.UP,rng.randf_range(0,TAU))
+		batch("WeatheredGranite",mesh,granite,Transform3D(rotation.scaled_local(scale),point))
+		rock_count += 1
+		if not preview_mode:
+			var shape := CollisionShape3D.new()
+			var bounds := BoxShape3D.new()
+			bounds.size = scale*1.45
+			shape.shape = bounds
+			shape.transform = Transform3D(rotation,point)
+			collisions.add_child(shape)
+
+func build_tea_gardens() -> void:
+	var leaf := material("tea","405c2d")
+	var stone := material("terrace_stone","878b76")
+	for garden in TEA_GARDENS:
+		for row in range(9):
+			tea_row_count += 1
+			for segment in range(72):
+				var angle: float = garden-0.13+segment*(0.264/72)
+				var offset := 32.0+row*8.0
+				var point := road_point(angle)-road_outward(angle)*offset
+				point.y = height_at(point.x,point.z)
+				var next := road_point(angle+0.264/72)-road_outward(angle+0.264/72)*offset
+				next.y = height_at(next.x,next.z)
+				var direction := (next-point).normalized()
+				var outward := Vector3(direction.z,0,-direction.x).normalized()
+				var basis := Basis(outward,direction.cross(outward).normalized(),direction)
+				var length := point.distance_to(next)
+				var middle := (point+next)/2
+				box("TeaHedges",Vector3(1.8,1.05,length+0.15),Transform3D(basis,middle+Vector3.UP*0.55),leaf)
+				if row%3==0:
+					box("TeaTerraceWalls",Vector3(0.35,0.6,length+0.15),Transform3D(basis,middle+outward*1.8),stone)
+
+func build_viewpoints() -> void:
+	if preview_mode:
+		return
+	for angle in [0.85,2.2,3.2,4.35]:
+		var forward := road_forward(angle)
+		var outward := road_outward(angle)
+		var position := road_point(angle)-outward*7.6+Vector3.UP*2.2
+		var basis := Basis.looking_at(forward)
+		var label := Label3D.new()
+		label.text = "连续弯道\n慢行  30"
+		label.font_size = 40
+		label.pixel_size = 0.009
+		label.position = position
+		label.basis = basis
+		label.modulate = Color("fff3bc")
+		add_child(label)
+		box("BendSignBoard",Vector3(2.2,1.5,0.1),Transform3D(basis,position-basis.z*0.08),material("sign","284f54"))
+		box("BendSignPosts",Vector3(0.1,2.3,0.1),Transform3D(Basis.IDENTITY,position-Vector3.UP*1.2-basis.z*0.1),material("posts","7b8891",0.65,0.45))

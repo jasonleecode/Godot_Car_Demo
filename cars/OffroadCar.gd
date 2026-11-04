@@ -12,11 +12,19 @@ const DROOP := 0.14
 @export var rebound_damping := 3900.0
 @export var anti_roll_rate := 2400.0
 @export var tire_grip := 1.15
-@export var drive_force := 9600.0
+@export var drive_force := 11000.0
+@export var drive_power := 110000.0 # Effective power at all four contact patches, in watts.
+@export var high_range_speed := 36.0
+@export var low_range_speed := 10.0
+@export var reverse_speed := 8.0
+@export var low_range_multiplier := 1.8
+@export var rolling_resistance := 0.022
 @export var input_enabled := true
+@export var allow_low_range := true
 var lengths: Array = [REST, REST, REST, REST]
 var contacts: Array = [false, false, false, false]
 var loads: Array = [0.0, 0.0, 0.0, 0.0]
+var parking := preload("res://cars/ParkingBrake.gd").new()
 var steering := 0.0
 var wheel_roll := 0.0
 var low_range := false
@@ -43,12 +51,12 @@ func _physics_process(delta: float) -> void:
 	if freeze:
 		return
 	var accel := Input.get_action_strength("forward")-Input.get_action_strength("backward") if input_enabled else 0.0
-	throttle = move_toward(throttle,accel,delta*3.0)
+	throttle = 0.0 if is_parked() else move_toward(throttle,accel,delta*3.0)
 	speed = linear_velocity.length()
 	var steer_input := Input.get_action_strength("left")-Input.get_action_strength("right") if input_enabled else 0.0
 	var limit := lerpf(0.53,0.20,clampf(speed/24.0,0,1))
 	steering = move_toward(steering,steer_input*limit,delta*1.4)
-	if input_enabled and Input.is_action_just_pressed("gear"):
+	if input_enabled and allow_low_range and Input.is_action_just_pressed("gear"):
 		low_range = not low_range
 	var handbrake := input_enabled and Input.is_action_pressed("brake")
 	var up := global_basis.y.normalized()
@@ -88,16 +96,24 @@ func _physics_process(delta: float) -> void:
 			velocity -= ground.linear_velocity+ground.angular_velocity.cross(point-ground.global_position)
 		var longitudinal := velocity.dot(tire_forward)
 		var lateral := velocity.dot(tire_side)
-		var max_speed := 10.0 if low_range else 28.0
-		var torque_falloff := clampf(1.0-absf(longitudinal)/max_speed,0,1)
-		var force := throttle*drive_force*0.25*torque_falloff*(1.5 if low_range else 1.0)
+		var wheel_speed := absf(longitudinal)
+		var speed_limit := low_range_speed if low_range else high_range_speed
+		if throttle<0:
+			speed_limit = minf(speed_limit,reverse_speed)
+		# Full low-speed torque, then a constant-power region; taper only near the limiter.
+		var torque_limit := drive_force*(low_range_multiplier if low_range else 1.0)
+		var available_force := minf(torque_limit,drive_power/maxf(wheel_speed,1.0))
+		var governor := 1.0-smoothstep(speed_limit*0.78,speed_limit,wheel_speed)
+		var force := throttle*available_force*0.25*governor
 		# Opposite pedal first slows the vehicle, then smoothly engages reverse.
 		if longitudinal*throttle < -0.7:
 			force = throttle*3800
-		var rolling := -longitudinal*65.0
+		# Tire rolling resistance follows wheel load, rather than growing into a large
+		# artificial brake at road speed. Retain lift-off engine braking separately.
+		var rolling := -signf(longitudinal)*float(loads[i])*rolling_resistance*clampf(wheel_speed/0.5,0,1)
 		if absf(throttle) < 0.03:
-			rolling = -longitudinal*380.0
-		if handbrake:
+			rolling -= longitudinal*380.0
+		if handbrake or is_parked():
 			force = -longitudinal*2000.0
 		var lateral_force := -lateral*mass*0.25/maxf(delta,0.001)*0.22
 		if handbrake and i >= 2:
@@ -126,3 +142,15 @@ func reset_suspension() -> void:
 	loads = [0.0,0.0,0.0,0.0]
 	throttle = 0
 	steering = 0
+
+func is_parked() -> bool:
+	return parking.engaged
+
+func toggle_parking() -> String:
+	return parking.toggle(self)
+
+func reset_parking_anchor() -> void:
+	parking.reset_anchor()
+
+func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	parking.integrate(self,state)

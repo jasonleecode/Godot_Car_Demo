@@ -3,6 +3,7 @@ class_name BaseCar
 
 @export var STEER_SPEED = 1.5
 @export var STEER_LIMIT = 0.6
+var parking := preload("res://cars/ParkingBrake.gd").new()
 var steer_target = 0
 @export var engine_force_value = 40
 
@@ -17,6 +18,11 @@ var speed: float
 func _physics_process(delta):
 	speed = linear_velocity.length()
 	fwd_mps = linear_velocity.dot(global_transform.basis.z)
+	if is_parked():
+		engine_force = 0
+		brake = 5.0
+		process_steer(delta)
+		return
 	traction(speed)
 	process_gear_shift()
 	process_accel(delta)
@@ -80,3 +86,15 @@ func process_brake(delta):
 
 func traction(speed):
 	apply_central_force(Vector3.DOWN*speed)
+
+func is_parked() -> bool:
+	return parking.engaged
+
+func toggle_parking() -> String:
+	return parking.toggle(self)
+
+func reset_parking_anchor() -> void:
+	parking.reset_anchor()
+
+func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	parking.integrate(self,state)

@@ -11,7 +11,7 @@ func check(ok: bool, message: String) -> void:
 		push_error("FAIL: "+message)
 		failures += 1
 func run() -> void:
-	root.get_node("Garage").drive(2,2)
+	root.get_node("Garage").drive(2,0)
 	await frames(180)
 	var world = current_scene
 	var hud = world.coastal_hud
@@ -48,7 +48,7 @@ func run() -> void:
 	hud.update_layout()
 	check(hud.dial_center.is_equal_approx(old_center+Vector2(400,200)),"dial follows bottom-right edge on resize")
 	check(hud.map_center.y==hud.size.y-199,"map follows bottom-left edge on resize")
-	root.get_node("Garage").drive(0,2)
+	root.get_node("Garage").drive(0,0)
 	await frames(120)
 	world = current_scene
 	world.set_physics_process(false)
@@ -57,7 +57,7 @@ func run() -> void:
 	world.car.linear_velocity = world.car.global_basis.z*10
 	world.coastal_hud.update_telemetry(0,true)
 	check(world.coastal_hud.drive_mode=="D  ·  4 挡","sedan displays its actual selected gear")
-	root.get_node("Garage").drive(1,1)
+	root.get_node("Garage").drive(1,2)
 	await frames(120)
 	check(current_scene.speed_label.visible and current_scene.gear_label.visible,"prototype retains its original HUD")
 	check(current_scene.suspension_panel.anchor_top==1,"prototype suspension stays in its original position")

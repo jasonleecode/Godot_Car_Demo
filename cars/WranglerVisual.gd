@@ -9,9 +9,7 @@ var metal := material(Color("92988d"), 0.4, 0.6)
 var lamp := material(Color("fff1c3"))
 var red := material(Color("ad4432"))
 var wheels: Array[Node3D] = []
-var axles: Array[MeshInstance3D] = []
-var shocks: Array[MeshInstance3D] = []
-var springs: Array[Node3D] = []
+var chassis := preload("res://cars/OffroadChassis.gd").new()
 const MOUNTS = [Vector3(1.0, 0.46, 1.32), Vector3(-1.0, 0.46, 1.32), Vector3(1.0, 0.46, -1.25), Vector3(-1.0, 0.46, -1.25)]
 
 static func material(color: Color, roughness: float = 0.8, metallic: float = 0.0) -> StandardMaterial3D:
@@ -104,7 +102,7 @@ func align_rod(node: Node3D, a: Vector3, b: Vector3) -> void:
 	if side.length_squared() < 0.001:
 		side = axis.cross(Vector3.RIGHT)
 	side = side.normalized()
-	node.transform = Transform3D(Basis(side, axis, side.cross(axis)).scaled(Vector3(1, direction.length(), 1)), (a+b)*0.5)
+	node.transform = Transform3D(Basis(side, axis, side.cross(axis)).scaled_local(Vector3(1, direction.length(), 1)), (a+b)*0.5)
 
 func wheel(parent: Node3D) -> Node3D:
 	var root := Node3D.new()
@@ -128,9 +126,10 @@ func wheel(parent: Node3D) -> Node3D:
 	return root
 
 func build() -> void:
-	# Frame rails, raised tub and flat hood.
-	for x in [-0.55, 0.55]:
-		box(self, Vector3(0.13,0.18,3.65), Vector3(x,0.22,0), dark)
+	chassis.name = "Chassis"
+	add_child(chassis)
+	chassis.configure(MOUNTS,false)
+	# Raised tub and flat hood.
 	box(self, Vector3(1.68,0.34,3.62), Vector3(0,0.56,0), paint)
 	box(self, Vector3(1.48,0.32,1.26), Vector3(0,0.88,1.13), paint)
 	box(self, Vector3(1.53,0.08,1.32), Vector3(0,1.08,1.13), paint)
@@ -200,19 +199,6 @@ func build() -> void:
 		add_child(steer)
 		wheel(steer)
 		wheels.append(steer)
-		shocks.append(rod(self,mount,mount-Vector3(0,0.5,0),0.035,metal))
-		var coil := Node3D.new()
-		add_child(coil)
-		for j in range(8):
-			var ring := TorusMesh.new()
-			ring.inner_radius = 0.065
-			ring.outer_radius = 0.09
-			ring.rings = 12
-			ring.ring_segments = 6
-			piece(coil,ring,Vector3(0,j/7.0,0),paint)
-		springs.append(coil)
-	for i in range(2):
-		axles.append(rod(self,Vector3.ZERO,Vector3.RIGHT,0.075,dark))
 	update_suspension([0.4,0.4,0.4,0.4],0,0)
 
 func update_suspension(lengths: Array, steering: float, roll: float) -> void:
@@ -223,10 +209,4 @@ func update_suspension(lengths: Array, steering: float, roll: float) -> void:
 		wheels[i].position = center
 		wheels[i].rotation.y = steering if i < 2 else 0.0
 		wheels[i].get_child(0).rotation.x = roll
-		var top: Vector3 = MOUNTS[i]+Vector3(-signf(MOUNTS[i].x)*0.16,0.12,0)
-		var bottom := center+Vector3(-signf(MOUNTS[i].x)*0.16,0,0)
-		align_rod(shocks[i],top,bottom)
-		springs[i].position = bottom
-		springs[i].scale.y = maxf(0.04,top.y-bottom.y)
-	for i in range(2):
-		align_rod(axles[i],wheels[2*i].position,wheels[2*i+1].position)
+	chassis.update_suspension(lengths,steering,roll)

@@ -63,8 +63,11 @@ func update_telemetry(delta: float, snap := false) -> void:
 	if heading.length_squared()>0.001:
 		marker_direction = heading.normalized()
 	var reverse := vehicle.linear_velocity.dot(forward)<-0.35
-	if vehicle.has_method("reset_suspension"):
-		drive_mode = ("R  ·  " if reverse else "D  ·  ")+("4L" if vehicle.low_range else "4H")
+	if vehicle.is_parked():
+		drive_mode = "P  ·  驻车"
+	elif vehicle.has_method("reset_suspension"):
+		var indicator: String = vehicle.drive_indicator() if vehicle.has_method("drive_indicator") else ("4L" if vehicle.low_range else "4H")
+		drive_mode = ("R  ·  " if reverse else "D  ·  ")+indicator
 	else:
 		drive_mode = "R" if reverse else "D  ·  %d 挡" % vehicle.gearshift
 	queue_redraw()
@@ -99,7 +102,7 @@ func draw_map() -> void:
 	draw_colored_polygon(triangle,AQUA)
 	triangle.append(triangle[0])
 	draw_polyline(triangle,WHITE,1.4,true)
-	text_at("滨海环线  /  %.2f km" % route_km,map_center+Vector2(0,MAP_RADIUS+30),19)
+	text_at("山海环线  /  %.2f km" % route_km,map_center+Vector2(0,MAP_RADIUS+30),19)
 
 func speed_angle(value: float) -> float:
 	return deg_to_rad(135+270*clampf(value/MAX_SPEED,0,1))

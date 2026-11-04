@@ -97,7 +97,7 @@ func show_home() -> void:
 	var preview := make_preview(2)
 	preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(preview)
-	v.add_child(label("自由驾驶     /     三种车型     /     两种场景",21,MUTED))
+	v.add_child(label("自由驾驶     /     %d 种车型     /     %d 种场景" % [Garage.VEHICLES.size(),Garage.LOCATIONS.size()],21,MUTED))
 
 func show_cards() -> void:
 	clear_content()
@@ -117,16 +117,35 @@ func show_cards() -> void:
 	top.add_child(back)
 	v.add_child(label("选择座驾，自由出发。",57))
 	v.add_child(label("先选择车辆，再选择目的地。每一种驾驶方式，都有自己的乐趣。",25,MUTED))
+	var scroll := ScrollContainer.new()
+	scroll.name = "VehicleScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	v.add_child(scroll)
 	var row := HBoxContainer.new()
 	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	row.add_theme_constant_override("separation",34)
-	v.add_child(row)
+	row.add_theme_constant_override("separation",22)
+	scroll.add_child(row)
 	for i in range(Garage.VEHICLES.size()):
 		var card := make_card(i)
+		card.custom_minimum_size.x = 405
 		row.add_child(card)
 		if i == Garage.selected:
-			card.grab_focus()
-	v.add_child(label("WASD / 方向键 驾驶     ·     SPACE 刹车     ·     ESC 复位     ·     V 切换视角 · 鼠标拖拽观察 · G 返回车库",21,MUTED))
+			focus_vehicle.call_deferred(scroll,card)
+	v.add_child(label("左右滚动选择更多车辆   ·   WASD 驾驶   ·   SPACE 刹车   ·   P 驻车   ·   V 切换视角   ·   G 返回车库",21,MUTED))
+
+func focus_vehicle(scroll: ScrollContainer, card: Control) -> void:
+	# Wait for the containers to size the row before revealing the selected car.
+	if not is_inside_tree():
+		return
+	var tree := get_tree()
+	await tree.process_frame
+	await tree.process_frame
+	if is_instance_valid(scroll) and is_instance_valid(card):
+		card.grab_focus()
+		scroll.ensure_control_visible(card)
 
 func show_locations() -> void:
 	clear_content()
@@ -155,7 +174,7 @@ func show_locations() -> void:
 		row.add_child(card)
 		if i == Garage.selected_location:
 			card.grab_focus()
-	v.add_child(label("三款车均可进入任意场景     ·     游戏中按 G 重新选择     ·     ESC 返回选车",21,MUTED))
+	v.add_child(label("所有车辆均可进入任意场景     ·     游戏中按 G 重新选择     ·     ESC 返回选车",21,MUTED))
 
 func make_location_preview(index: int) -> SubViewportContainer:
 	var is_valley: bool = Garage.LOCATIONS[index].id == "valley"
@@ -209,9 +228,9 @@ func make_location_preview(index: int) -> SubViewportContainer:
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 132 if is_valley else 62
 	if is_coast:
-		camera.position = Vector3(310,220,-310)
-		camera.basis = Basis.looking_at(Vector3(100,0,-30)-camera.position)
-		camera.size = 260
+		camera.position = Vector3(790,620,-820)
+		camera.basis = Basis.looking_at(Vector3(60,45,-70)-camera.position)
+		camera.size = 750
 		environment.environment.background_color = Color("90c7df")
 	camera.current = true
 	return container
@@ -239,7 +258,7 @@ func make_card(index: int, is_location: bool = false) -> Button:
 	card.add_child(margin)
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	for edge in ["left","right","top","bottom"]:
-		margin.add_theme_constant_override("margin_"+edge,32)
+		margin.add_theme_constant_override("margin_"+edge,32 if is_location else 24)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation",14)
 	margin.add_child(v)
@@ -248,7 +267,7 @@ func make_card(index: int, is_location: bool = false) -> Button:
 	preview.custom_minimum_size.y = 280
 	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	v.add_child(preview)
-	v.add_child(label(info.name,34 if is_location else 32))
+	v.add_child(label(info.name,34 if is_location else 28))
 	v.add_child(label(info.subtitle,20,MUTED))
 	var description := label(info.description,20,MUTED)
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -313,7 +332,15 @@ func make_preview(index: int) -> SubViewportContainer:
 	stage.add_child(platform)
 	platform.position.y = -0.09
 	var model: Node3D
-	if Garage.VEHICLES[index].id == "rubicon":
+	if Garage.VEHICLES[index].id == "allroad":
+		model = Node3D.new()
+		model.set_script(preload("res://cars/AllroadVisual.gd"))
+		model.position.y = 0.36
+	elif Garage.VEHICLES[index].id == "jimny":
+		model = Node3D.new()
+		model.set_script(preload("res://cars/JimnyVisual.gd"))
+		model.position.y = 0.35
+	elif Garage.VEHICLES[index].id == "rubicon":
 		model = Node3D.new()
 		model.set_script(preload("res://cars/RubiconVisual.gd"))
 		model.position.y = 0.43

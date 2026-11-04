@@ -6,6 +6,7 @@ mass = 2250.0
 center_of_mass_mode = 1
 center_of_mass = Vector3(0, 0.34, 0)
 continuous_cd = true
+linear_damp_mode = 1
 linear_damp = 0.04
 angular_damp = 0.45
 script = ExtResource("1")
@@ -16,6 +17,7 @@ compression_damping = 3200.0
 rebound_damping = 4700.0
 anti_roll_rate = 3100.0
 tire_grip = 1.22
-drive_force = 12400.0
+drive_force = 14000.0
+drive_power = 140000.0
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2")

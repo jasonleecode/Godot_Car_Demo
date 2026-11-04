@@ -15,7 +15,7 @@ func run() -> void:
 	await shot("/tmp/car-home.png")
 	current_scene.show_cards()
 	await shot("/tmp/car-cards.png")
-	root.get_node("Garage").drive(1,1)
+	root.get_node("Garage").drive(1,2)
 	await create_timer(3).timeout
 	await shot("/tmp/car-wrangler.png")
 	# Front three-quarter view of the actual vehicle in the existing world.

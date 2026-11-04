@@ -13,10 +13,11 @@ func _ready() -> void:
 	build_environment()
 	spawn = road_spawn(Coast.SPAWN_ANGLE)
 	super._ready()
+	camera.far = 6000
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	route_label = Label.new()
-	route_label.position = Vector2(36,325)
+	route_label.position = Vector2(36,360)
 	route_label.add_theme_font_size_override("font_size",22)
 	route_label.add_theme_color_override("font_color",Color("fff4d6"))
 	route_label.add_theme_color_override("font_shadow_color",Color("1c3540"))
@@ -60,7 +61,7 @@ func build_environment() -> void:
 	env.ssao_intensity = 1.2
 	env.fog_enabled = true
 	env.fog_light_color = Color("a6cbd9")
-	env.fog_density = 0.00018
+	env.fog_density = 0.00012
 	env.fog_sky_affect = 0.05
 	add_child(environment)
 	var sun := DirectionalLight3D.new()
@@ -89,7 +90,7 @@ func _physics_process(delta: float) -> void:
 	var distance := Coast.road_distance(car.position.x,car.position.z)
 	if absf(distance)<4.7 and car.global_basis.y.y>0.65 and car.position.y>1:
 		safe_angle = Coast.closest_angle(car.position.x,car.position.z)
-	route_label.text = "滨海道路  ·  %.2f km 环线  ·  沿海岸自由驾驶" % (terrain.road_length/1000)
+	route_label.text = "滨海道路  ·  %.2f km 环线  ·  崂山印象 · 山海慢行" % (terrain.road_length/1000)
 	# The sea is scenery, not a drivable plane. Recover to the last safe road section.
 	if car.position.y<0.25 or maxf(absf(car.position.x),absf(car.position.z))>Coast.EXTENT-5:
 		var initial_spawn := spawn

@@ -3,7 +3,7 @@ extends Camera3D
 ## Shared camera for every vehicle and location. Vehicle forward is local +Z.
 enum View { REAR, SIDE, DRIVER, TOP }
 const VIEW_NAMES := ["后视", "侧视", "第一视角", "俯视"]
-const EYES := [Vector3(0.40,1.18,0.0), Vector3(0.39,1.50,0.05), Vector3(0.42,1.30,-0.12)]
+const EYES := [Vector3(0.40,1.18,0.0), Vector3(0.39,1.50,0.05), Vector3(0.40,1.12,-0.06), Vector3(0.35,1.10,-0.04), Vector3(0.39,0.94,-0.04)]
 var vehicle: RigidBody3D
 var ground_height: Callable
 var eye := Vector3.ZERO

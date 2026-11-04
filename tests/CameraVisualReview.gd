@@ -7,7 +7,7 @@ func shot(path: String) -> void:
 	root.get_texture().get_image().save_png(path)
 func run() -> void:
 	var garage := root.get_node("Garage")
-	garage.drive(2,0)
+	garage.drive(2,1)
 	await create_timer(3).timeout
 	for mode in range(4):
 		await shot("/tmp/camera-rubicon-%d.png" % mode)
@@ -17,7 +17,7 @@ func run() -> void:
 	current_scene.camera.distance = 4.5
 	await shot("/tmp/camera-rubicon-orbit.png")
 	for vehicle in range(2):
-		garage.drive(vehicle,0)
+		garage.drive(vehicle,1)
 		await create_timer(3).timeout
 		current_scene.camera.cycle_view()
 		current_scene.camera.cycle_view()
